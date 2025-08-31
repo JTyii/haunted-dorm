@@ -6,7 +6,7 @@ class RoomSelectScene extends Phaser.Scene {
     preload() {
         this.load.image('player', 'https://labs.phaser.io/assets/sprites/phaser-dude.png');
         this.load.image('tower', 'https://labs.phaser.io/assets/sprites/block.png'); 
-        this.load.image('bed', 'https://labs.phaser.io/assets/sprites/bed.png');     
+        this.load.image('bed', '../assets/single-bed.png');     
     }
 
     showMessage(text, x, y, duration = 2000) {
@@ -38,6 +38,8 @@ class RoomSelectScene extends Phaser.Scene {
         this.sleeping = {}; 
         this.zzzTexts = {}; 
         this.sleepTweens = {}; 
+        this.bedOverlapsSetup = false; // Track if overlaps are set up
+        
         // 🔔 Listen for broadcasted room messages
         this.socket.on('roomMessage', ({ text, x, y }) => {
             this.showMessage(text, x, y);
@@ -45,10 +47,12 @@ class RoomSelectScene extends Phaser.Scene {
 
         const screenWidth = this.sys.game.config.width;
         const screenHeight = this.sys.game.config.height;
-        const tileSize = 40;
+        const tileSize = 60;
 
         // --- receive full game state ---
         this.socket.on('gameState', (state) => {
+            console.log('📦 Received game state:', state); // Debug log
+
             state.rooms.forEach((room, index) => {
                 if (!this.roomRects[room.id]) {
                     const roomCols = room.cols || 6;
@@ -97,21 +101,10 @@ class RoomSelectScene extends Phaser.Scene {
 
                         // make bed an image + physics object
                         const bedSprite = this.add.image(bedX, bedY, 'bed').setScale(0.5);
-                        this.physics.add.existing(bedSprite, true);  // ✅ important
+                        this.physics.add.existing(bedSprite, true);  // static body
 
                         this.roomBeds[room.id].push(bedSprite);
-
-                        // ✅ check overlap between player and this bed
-                        this.physics.add.overlap(this.player, bedSprite, () => {
-                            if (!this.playerSleeping) {
-                                this.socket.emit('enterRoom', {
-                                    roomId,
-                                    bedIndex: i,
-                                    bedX: bedSprite.x,
-                                    bedY: bedSprite.y
-                                });
-                            }
-                        });
+                        console.log(`🛏️ Created bed at (${bedX}, ${bedY}) in room ${room.id}`); // Debug log
                     }
 
                     // --- 🔑 Randomized door ---
@@ -206,7 +199,7 @@ class RoomSelectScene extends Phaser.Scene {
                     this.roomRects[room.id].walls = walls;
                 }
 
-                // update bed occupancy
+                // update bed occupancy visual
                 if (this.roomBeds[room.id]) {
                     this.roomBeds[room.id].forEach((bed, i) => {
                         const occupant = room.occupiedBeds.find(b => b.index === i);
@@ -230,34 +223,17 @@ class RoomSelectScene extends Phaser.Scene {
                     sprite.setCollideWorldBounds(true);
                     this.players[playerData.id] = sprite;
 
+                    console.log(`👤 Created player ${playerData.id} at (${playerData.x}, ${playerData.y})`); // Debug log
+
                     if (playerData.id === this.socket.id) {
                         this.player = sprite; // ✅ keep reference to self
                         this.cameras.main.startFollow(sprite, true);
 
-                        // attach collisions to walls
-                        Object.values(this.roomRects).forEach(room => {
-                            if (room.walls) {
-                                room.walls.forEach(wall => {
-                                    this.physics.add.collider(sprite, wall);
-                                });
-                            }
-                        });
-
-                        // ✅ NOW hook overlaps with every bed
-                        Object.entries(this.roomBeds).forEach(([roomId, beds]) => {
-                            beds.forEach((bedSprite, i) => {
-                                this.physics.add.overlap(this.player, bedSprite, () => {
-                                    if (!this.playerSleeping) {
-                                        this.socket.emit('enterRoom', {
-                                            roomId,
-                                            bedIndex: i,
-                                            bedX: bedSprite.x,
-                                            bedY: bedSprite.y
-                                        });
-                                    }
-                                });
-                            });
-                        });
+                        // ✅ Set up wall collisions AFTER player exists
+                        this.setupWallCollisions();
+                        
+                        // ✅ Set up bed overlaps AFTER player exists
+                        this.setupBedOverlaps();
                     }
                 } else {
                     if (!playerData.isSleeping) {
@@ -277,6 +253,13 @@ class RoomSelectScene extends Phaser.Scene {
             this.playerTargets[playerId] = { x, y };
         });
 
+        // ✅ Listen for snapToBed events
+        this.socket.on('snapToBed', ({ playerId, bedX, bedY, roomId }) => {
+            console.log(`📨 Received snapToBed for player ${playerId}`); // Debug log
+            if (!this.players[playerId]) return;
+            this.makePlayerSleep(playerId, bedX, bedY);
+        });
+
         // controls
         this.cursors = this.input.keyboard.createCursorKeys();
         this.wasd = this.input.keyboard.addKeys({
@@ -285,6 +268,54 @@ class RoomSelectScene extends Phaser.Scene {
             down: Phaser.Input.Keyboard.KeyCodes.S,
             right: Phaser.Input.Keyboard.KeyCodes.D,
         });
+    }
+
+    // ✅ Helper method to set up wall collisions
+    setupWallCollisions() {
+        if (!this.player) return;
+        
+        console.log('🧱 Setting up wall collisions'); // Debug log
+        Object.values(this.roomRects).forEach(room => {
+            if (room.walls) {
+                room.walls.forEach(wall => {
+                    this.physics.add.collider(this.player, wall);
+                });
+            }
+        });
+    }
+
+    // ✅ Helper method to set up bed overlaps
+    setupBedOverlaps() {
+        if (!this.player) {
+            console.log('❌ Cannot setup bed overlaps - no player sprite'); // Debug log
+            return;
+        }
+        
+        console.log('🛏️ Setting up bed overlaps for', Object.keys(this.roomBeds).length, 'rooms'); // Debug log
+        
+        Object.entries(this.roomBeds).forEach(([roomId, beds]) => {
+            beds.forEach((bedSprite, i) => {
+                console.log(`🔗 Setting up overlap for bed ${i} in room ${roomId} at (${bedSprite.x}, ${bedSprite.y})`); // Debug log
+                
+                this.physics.add.overlap(this.player, bedSprite, () => {
+                    console.log(`💥 Bed overlap detected! Room ${roomId}, Bed ${i}`); // Debug log
+                    
+                    if (!this.sleeping[this.socket.id]) {
+                        console.log(`🛌 Attempting to enter room ${roomId}, bed ${i}`); // Debug log
+                        this.socket.emit('enterRoom', {
+                            roomId,
+                            bedIndex: i,
+                            bedX: bedSprite.x,
+                            bedY: bedSprite.y
+                        });
+                    } else {
+                        console.log('😴 Player is already sleeping, ignoring overlap'); // Debug log
+                    }
+                });
+            });
+        });
+        
+        this.bedOverlapsSetup = true;
     }
 
     update() {
@@ -315,29 +346,9 @@ class RoomSelectScene extends Phaser.Scene {
 
         if (moved) {
             this.socket.emit('movePlayer', { x: me.x, y: me.y });
-
-            // 🛏️ check entry once
-            for (const roomId in this.roomRects) {
-                const { x, y, width, height } = this.roomRects[roomId];
-                if (me.x > x - width / 2 && me.x < x + width / 2 &&
-                    me.y > y - height / 2 && me.y < y + height / 2) {
-                    
-                    const beds = this.roomBeds[roomId];
-                    if (beds) {
-                        const freeIndex = beds.findIndex((bed, i) => !this.sleepingByBed(roomId, i));
-                        if (freeIndex >= 0) {
-                            const bed = beds[freeIndex];
-
-                            // 📢 Tell server to snap & broadcast message
-                            this.socket.emit('enterRoom', { roomId, bedIndex: freeIndex, bedX: bed.x, bedY: bed.y });
-                            return; // stop double triggering
-                        }
-                    }
-                }
-            }
         }
 
-        // interpolate others
+        // interpolate other players
         Object.keys(this.playerTargets).forEach(playerId => {
             const target = this.playerTargets[playerId];
             const sprite = this.players[playerId];
@@ -346,32 +357,32 @@ class RoomSelectScene extends Phaser.Scene {
             sprite.x += (target.x - sprite.x) * lerp;
             sprite.y += (target.y - sprite.y) * lerp;
         });
-
-        this.socket.on('snapToBed', ({ playerId, bedX, bedY, roomId }) => {
-            if (!this.players[playerId]) return;
-            this.makePlayerSleep(playerId, bedX, bedY);
-        });
     }
 
     sleepingByBed(roomId, index) {
-        const room = this.roomBeds[roomId];
-        if (!room) return false;
-        return room[index]?.tintTopLeft;
+        // Check server game state for bed occupancy
+        return false; // Let server handle bed occupancy logic
     }
 
     makePlayerSleep(playerId, x, y) {
         const sprite = this.players[playerId];
         if (!sprite) return;
 
+        console.log(`😴 Making player ${playerId} sleep at (${x}, ${y})`); // Debug log
+
         sprite.setPosition(x, y);
         sprite.setVelocity(0);           // stop movement
-        sprite.body.immovable = true;    // lock in place
-        sprite.body.moves = false;       // prevent physics push
+        if (sprite.body) {
+            sprite.body.immovable = true;    // lock in place
+            sprite.body.moves = false;       // prevent physics push
+        }
         sprite.setTint(0x3399ff);
 
         this.sleeping[playerId] = true;
 
-        if (this.sleepTweens[playerId]) this.sleepTweens[playerId].stop();
+        if (this.sleepTweens[playerId]) {
+            this.sleepTweens[playerId].stop();
+        }
         this.sleepTweens[playerId] = this.tweens.add({
             targets: sprite,
             y: sprite.y - 5,
@@ -386,6 +397,7 @@ class RoomSelectScene extends Phaser.Scene {
                 .setOrigin(0.5);
         }
         this.zzzTexts[playerId].setVisible(true);
+        this.zzzTexts[playerId].setPosition(sprite.x, sprite.y - 30);
 
         this.tweens.add({
             targets: this.zzzTexts[playerId],
@@ -404,9 +416,13 @@ class RoomSelectScene extends Phaser.Scene {
         const sprite = this.players[playerId];
         if (!sprite) return;
 
+        console.log(`☀️ Waking up player ${playerId}`); // Debug log
+
         sprite.clearTint();
-        sprite.body.immovable = false;
-        sprite.body.moves = true;
+        if (sprite.body) {
+            sprite.body.immovable = false;
+            sprite.body.moves = true;
+        }
 
         this.sleeping[playerId] = false;
 
