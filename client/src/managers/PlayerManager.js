@@ -1,6 +1,4 @@
-import { GAME_CONFIG } from '../config/gameConfig.js';
-
-export class PlayerManager {
+class PlayerManager {
     constructor(scene) {
         this.scene = scene;
         this.players = {};
@@ -228,25 +226,25 @@ export class PlayerManager {
     }
 
     destroy() {
-        // 🧹 Clean up money timers
+        // Clean up money timers
         Object.values(this.moneyTimers).forEach(timer => {
             clearInterval(timer);
         });
         this.moneyTimers = {};
 
-        // 🧹 Stop tweens
+        // Stop tweens
         Object.values(this.sleepTweens).forEach(tween => {
             if (tween) tween.stop();
         });
         this.sleepTweens = {};
 
-        // 🧹 Remove Zzz texts
+        // Remove Zzz texts
         Object.values(this.zzzTexts).forEach(text => {
             if (text) text.destroy();
         });
         this.zzzTexts = {};
 
-        // 🧹 Destroy player sprites
+        // Destroy player sprites
         Object.values(this.players).forEach(sprite => {
             if (sprite) sprite.destroy();
         });

@@ -1,6 +1,6 @@
-import { generateRooms } from './rooms';
-import GhostLogic from './ghostLogic';
-import config from '../config/serverConfig';
+const { generateRooms } = require('./rooms');
+const GhostLogic = require('./ghostLogic');
+const config = require('../config/serverConfig');
 
 // Initialize ghost logic
 const ghostLogic = new GhostLogic();

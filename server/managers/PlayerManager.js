@@ -1,4 +1,4 @@
-import { SERVER, PLAYER } from '../config/serverConfig';
+const config = require('../config/serverConfig');
 
 class PlayerManager {
     constructor() {
@@ -9,13 +9,13 @@ class PlayerManager {
     createPlayer(socketId) {
         const player = {
             id: socketId,
-            x: PLAYER.STARTING_X,
-            y: PLAYER.STARTING_Y,
+            x: config.PLAYER.STARTING_X,
+            y: config.PLAYER.STARTING_Y,
             roomId: null,
             towers: [],
             isSleeping: false,
             bed: null, // { roomId, bedIndex }
-            money: 100,
+            money: config.PLAYER.STARTING_MONEY,
             joinTime: Date.now()
         };
 
@@ -79,7 +79,9 @@ class PlayerManager {
 
         if (player.isSleeping && player.sleepStartTime) {
             const sleepDuration = Date.now() - player.sleepStartTime;
-            this.playerStats[socketId].timeSlept += sleepDuration;
+            if (this.playerStats[socketId]) {
+                this.playerStats[socketId].timeSlept += sleepDuration;
+            }
         }
 
         player.isSleeping = false;
@@ -96,7 +98,9 @@ class PlayerManager {
         if (!player) return false;
 
         player.money += amount;
-        this.playerStats[socketId].moneyEarned += amount;
+        if (this.playerStats[socketId]) {
+            this.playerStats[socketId].moneyEarned += amount;
+        }
         return true;
     }
 
@@ -117,7 +121,9 @@ class PlayerManager {
         }
         
         player.towers.push(towerData);
-        this.playerStats[socketId].towersPlaced++;
+        if (this.playerStats[socketId]) {
+            this.playerStats[socketId].towersPlaced++;
+        }
         
         console.log(`🔫 Player ${socketId} placed tower:`, towerData);
         return true;
@@ -180,7 +186,7 @@ class PlayerManager {
 
     // Money earning system for sleeping players
     processSleepEarnings() {
-        const earnings = 5;
+        const earnings = config.PLAYER.SLEEP_EARNINGS;
         Object.values(this.players).forEach(player => {
             if (player.isSleeping) {
                 this.addMoney(player.id, earnings);

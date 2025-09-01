@@ -1,5 +1,5 @@
 // Shared constants between client and server
-export const SHARED_CONFIG = {
+const SHARED_CONFIG = {
     ROOM_GENERATION: {
         MIN_BEDS: 1,
         MAX_BEDS: 2,
@@ -40,7 +40,7 @@ export const SHARED_CONFIG = {
 };
 
 // Utility functions that can be used by both client and server
-export const SharedUtils = {
+const SharedUtils = {
     // Generate random integer between min and max (inclusive)
     randInt(min, max) {
         return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -57,3 +57,13 @@ export const SharedUtils = {
                py >= ry - height/2 && py <= ry + height/2;
     }
 };
+
+// Export for both CommonJS (Node.js) and ES6 modules
+if (typeof module !== 'undefined' && module.exports) {
+    // Node.js environment
+    module.exports = { SHARED_CONFIG, SharedUtils };
+} else {
+    // Browser environment
+    window.SHARED_CONFIG = SHARED_CONFIG;
+    window.SharedUtils = SharedUtils;
+}

@@ -1,6 +1,4 @@
-import { SHARED_CONFIG } from '../../../shared/constants.js';
-
-export class NetworkManager {
+class NetworkManager {
     constructor(scene) {
         this.scene = scene;
         this.socket = io();
@@ -67,5 +65,11 @@ export class NetworkManager {
 
     getSocketId() {
         return this.socket.id;
+    }
+
+    destroy() {
+        if (this.socket) {
+            this.socket.disconnect();
+        }
     }
 }

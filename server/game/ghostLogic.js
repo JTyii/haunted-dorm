@@ -1,5 +1,5 @@
-import { SharedUtils } from '../../shared/constants';
-import { getTowersInRange, canTowerFire, fireTower } from './towers';
+const { SHARED_CONFIG, SharedUtils } = require('../../shared/constants');
+const { getTowersInRange, canTowerFire, fireTower } = require('./towers');
 
 class GhostLogic {
     constructor() {

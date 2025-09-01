@@ -1,4 +1,4 @@
-import { SHARED_CONFIG } from '../../shared/constants';
+const { SHARED_CONFIG } = require('../../shared/constants');
 
 function placeTower(gameState, socket, data) {
     const { roomId, col, row, cost, type } = data;

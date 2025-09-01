@@ -6,9 +6,29 @@
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
     <!-- Socket.io -->
     <script src="/socket.io/socket.io.js"></script>
-    <!-- Correct path to GameScene -->
+    
+    <!-- Load shared constants -->
+    <script src="/shared/constants.js"></script>
+    
+    <!-- Load managers and UI components -->
+    <script>
+        // Make components available globally for RoomSelectScene
+        const managers = {};
+        const ui = {};
+    </script>
+    
+    <!-- Load game components in order -->
+    <script src="src/managers/NetworkManager.js"></script>
+    <script src="src/managers/UIManager.js"></script>
+    <script src="src/managers/PlayerManager.js"></script>
+    <script src="src/managers/RoomManager.js"></script>
+    <script src="src/ui/BuildMenu.js"></script>
+    
+    <!-- Load scenes -->
     <script src="scenes/RoomSelectScene.js"></script>
     <script src="scenes/GameScene.js"></script>
+    
+    <!-- Main game file -->
     <script src="main.js"></script>
 </head>
 <body>
