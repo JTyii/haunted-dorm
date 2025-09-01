@@ -7,6 +7,9 @@ class RoomSelectScene extends Phaser.Scene {
         this.load.image('player', 'https://labs.phaser.io/assets/sprites/phaser-dude.png');
         this.load.image('tower', 'https://labs.phaser.io/assets/sprites/block.png'); 
         this.load.image('bed', '../assets/single-bed.png');     
+        this.load.image('coin', '../assets/goldCoin5.png');
+        this.load.image('turret', 'https://labs.phaser.io/assets/sprites/block.png'); // ✅ Turret image
+        this.load.image('menu-bg', '../assets/menuFrame.png'); // ✅ Menu background
     }
 
     showMessage(text, x, y, duration = 2000) {
@@ -27,6 +30,165 @@ class RoomSelectScene extends Phaser.Scene {
         });
     }
 
+    // ✅ Check if a tile is occupied by turret or bed
+    isTileOccupied(roomId, col, row) {
+        // Check for beds
+        const room = this.roomRects[roomId];
+        if (!room) return false;
+        
+        const roomRows = 4; // Default room height
+        const bedSprites = this.roomBeds[roomId] || [];
+        for (let bed of bedSprites) {
+            if (Phaser.Math.Distance.Between(bed.x, bed.y, 
+                this.roomRects[roomId].x - this.roomRects[roomId].width/2 + col * 60 + 30,
+                this.roomRects[roomId].y - this.roomRects[roomId].height/2 + row * 60 + 30
+            ) < 20) {
+                return true; // Tile actually has a bed
+            }
+        }
+        
+        // Check for existing turrets
+        const turretKey = `${roomId}-${col}-${row}`;
+        return this.placedTurrets[turretKey] !== undefined;
+    }
+
+    // ✅ Open build menu at clicked tile
+    openBuildMenu(x, y, roomId, col, row) {
+        if (this.buildMenuOpen) {
+            this.closeBuildMenu();
+            return;
+        }
+
+        // Check if tile is occupied
+        if (this.isTileOccupied(roomId, col, row)) {
+            this.showMessage('Tile is occupied!', x, y);
+            return;
+        }
+
+        console.log(`🔨 Opening build menu at tile (${col}, ${row}) in room ${roomId}`);
+
+        this.selectedTile = { x, y, roomId, col, row };
+        this.buildMenuOpen = true;
+
+        // Create build menu background
+        this.buildMenu = this.add.container(x, y - 80);
+        
+        const menuBg = this.add.rectangle(0, 0, 200, 80, 0x000000, 0.9)
+            .setStrokeStyle(2, 0xffffff);
+        
+        const titleText = this.add.text(0, -25, 'Build Defense', {
+            fontSize: '14px',
+            fill: '#fff'
+        }).setOrigin(0.5);
+
+        // ✅ Basic Turret option
+        const turretButton = this.add.rectangle(-60, 10, 50, 30, 0x4CAF50)
+            .setStrokeStyle(1, 0xffffff)
+            .setInteractive();
+        
+        const turretText = this.add.text(-60, 10, 'Turret\n$50', {
+            fontSize: '10px',
+            fill: '#fff',
+            align: 'center'
+        }).setOrigin(0.5);
+
+        // ✅ Cancel button
+        const cancelButton = this.add.rectangle(60, 10, 50, 30, 0xf44336)
+            .setStrokeStyle(1, 0xffffff)
+            .setInteractive();
+            
+        const cancelText = this.add.text(60, 10, 'Cancel', {
+            fontSize: '12px',
+            fill: '#fff'
+        }).setOrigin(0.5);
+
+        // Add all elements to container
+        this.buildMenu.add([menuBg, titleText, turretButton, turretText, cancelButton, cancelText]);
+
+        // ✅ Button interactions
+        turretButton.on('pointerdown', () => {
+            this.buyTurret(50); // Cost: $50
+        });
+
+        turretButton.on('pointerover', () => {
+            turretButton.setFillStyle(0x66BB6A);
+        });
+
+        turretButton.on('pointerout', () => {
+            turretButton.setFillStyle(0x4CAF50);
+        });
+
+        cancelButton.on('pointerdown', () => {
+            this.closeBuildMenu();
+        });
+
+        cancelButton.on('pointerover', () => {
+            cancelButton.setFillStyle(0xef5350);
+        });
+
+        cancelButton.on('pointerout', () => {
+            cancelButton.setFillStyle(0xf44336);
+        });
+
+        // ✅ Auto-close when clicking elsewhere
+        this.input.on('pointerdown', (pointer, currentlyOver) => {
+            if (this.buildMenuOpen && currentlyOver.length === 0) {
+                this.closeBuildMenu();
+            }
+        });
+    }
+
+    // ✅ Close build menu
+    closeBuildMenu() {
+        if (this.buildMenu) {
+            this.buildMenu.destroy();
+            this.buildMenu = null;
+        }
+        this.buildMenuOpen = false;
+        this.selectedTile = null;
+        console.log('🔨 Build menu closed');
+    }
+
+    // ✅ Buy and place turret
+    buyTurret(cost) {
+        if (this.playerMoney < cost) {
+            this.showMessage('Not enough money!', this.selectedTile.x, this.selectedTile.y, 1500);
+            this.closeBuildMenu();
+            return;
+        }
+
+        if (!this.selectedTile) return;
+
+        const { x, y, roomId, col, row } = this.selectedTile;
+        
+        // Deduct money
+        this.playerMoney -= cost;
+        this.updateMoneyDisplay();
+        
+        // Place turret visually
+        const turret = this.add.image(tileX, tileY, 'turret')
+            .setScale(0.6)
+            .setTint(0x00ff00);
+        
+        // Store turret reference
+        const turretKey = `${roomId}-${col}-${row}`;
+        this.placedTurrets[turretKey] = turret;
+        
+        // Send to server
+        this.socket.emit('placeTower', { 
+            roomId: roomId, 
+            col: col, 
+            row: row,
+            cost: cost,
+            type: 'basic'
+        });
+        
+        console.log(`🔫 Placed turret at (${col}, ${row}) in room ${roomId} for ${cost}`);
+        this.showMessage(`Turret built! -${cost}`, x, y, 1500);
+        
+        this.closeBuildMenu();
+    }
+
     create() {
         this.socket = io();
 
@@ -39,7 +201,15 @@ class RoomSelectScene extends Phaser.Scene {
         this.zzzTexts = {}; 
         this.sleepTweens = {}; 
         this.bedOverlapsSetup = false;
-        this.roomsCreated = false; // Track if rooms are created
+        this.roomsCreated = false; 
+        this.playerMoney = 100;
+        this.moneyDisplay = null;
+        this.coinAnimations = {};
+        this.moneyTimers = {};
+        this.buildMenu = null; // ✅ Build menu UI
+        this.buildMenuOpen = false; // ✅ Track if build menu is open
+        this.selectedTile = null; // ✅ Currently selected tile for building
+        this.placedTurrets = {}; // ✅ Track placed turrets per room
         
         // 🔔 Listen for broadcasted room messages
         this.socket.on('roomMessage', ({ text, x, y }) => {
@@ -67,6 +237,16 @@ class RoomSelectScene extends Phaser.Scene {
             });
 
             this.roomsCreated = true;
+
+            // ✅ Create money display UI (fixed position on top right)
+            if (!this.moneyDisplay) {
+                this.moneyDisplay = this.add.text(screenWidth - 20, 20, `💰 ${this.playerMoney}`, {
+                    fontSize: '24px',
+                    fill: '#FFD700',
+                    backgroundColor: 'rgba(0,0,0,0.8)',
+                    padding: { x: 12, y: 8 }
+                }).setOrigin(1, 0).setScrollFactor(0); // ✅ Fixed to camera
+            }
 
             // Create/update players
             Object.values(state.players).forEach(playerData => {
@@ -114,11 +294,22 @@ class RoomSelectScene extends Phaser.Scene {
             this.playerTargets[playerId] = { x, y };
         });
 
+        // Listen for new towers placed
+        this.socket.on('towerPlaced', (tower) => {
+            // Example: assumes you have a function to add turrets
+            this.placeTurret(tower.roomId, tower.col, tower.row, tower.type);
+        });
+
         // ✅ Listen for snapToBed events
         this.socket.on('snapToBed', ({ playerId, bedX, bedY, roomId }) => {
             console.log(`📨 Received snapToBed for player ${playerId} at (${bedX}, ${bedY})`);
             if (!this.players[playerId]) return;
             this.makePlayerSleep(playerId, bedX, bedY);
+
+            // ✅ Start earning money if it's the current player
+            if (playerId === this.socket.id) {
+                this.startEarningMoney(playerId);
+            }
         });
 
         // controls
@@ -183,7 +374,7 @@ class RoomSelectScene extends Phaser.Scene {
                     .setInteractive();
 
                 tile.on('pointerdown', () => {
-                    this.socket.emit('placeTower', { roomId: room.id, col, row });
+                    this.openBuildMenu(tileX, tileY, room.id, col, row);
                 });
 
                 this.roomRects[room.id].tiles.push({ col, row, tile });
@@ -390,6 +581,20 @@ class RoomSelectScene extends Phaser.Scene {
         console.log('✅ Bed overlaps setup complete');
     }
 
+    placeTurret(roomId, col, row, type) {
+        const room = this.rooms.find(r => r.id === roomId);
+        if (!room) return;
+
+        const tileSize = 40; // or whatever your grid uses
+        const x = room.x + col * tileSize + tileSize / 2;
+        const y = room.y + row * tileSize + tileSize / 2;
+
+        const turret = this.add.sprite(x, y, type); // `type` should match your texture key
+        turret.setOrigin(0.5);
+        room.turrets = room.turrets || [];
+        room.turrets.push(turret);
+    }
+
     update() {
         const speed = 200;
         const me = this.players[this.socket.id];
@@ -486,6 +691,82 @@ class RoomSelectScene extends Phaser.Scene {
                 target.setAlpha(1);
             }
         });
+    }
+
+    // ✅ Start earning money while sleeping
+    startEarningMoney(playerId) {
+        if (this.moneyTimers[playerId]) {
+            clearInterval(this.moneyTimers[playerId]);
+        }
+
+        console.log(`💰 Player ${playerId} started earning money`);
+        
+        this.moneyTimers[playerId] = setInterval(() => {
+            if (this.sleeping[playerId]) {
+                // Earn 10 coins every 2 seconds
+                if (playerId === this.socket.id) {
+                    this.playerMoney += 5;
+                    this.updateMoneyDisplay();
+                }
+                
+                // Show floating coin animation
+                this.showFloatingCoin(playerId);
+            }
+        }, 2000); // Every 2 seconds
+    }
+
+    // ✅ Show floating coin animation above sleeping player
+    showFloatingCoin(playerId) {
+        const sprite = this.players[playerId];
+        if (!sprite) return;
+
+        const coin = this.add.image(sprite.x + (Math.random() - 0.5) * 30, sprite.y - 20, 'coin')
+            .setScale(0.3)
+            .setAlpha(0);
+
+        // Animate coin floating up and fading
+        this.tweens.add({
+            targets: coin,
+            y: coin.y - 60,
+            alpha: 1,
+            duration: 800,
+            ease: 'Power2'
+        });
+
+        this.tweens.add({
+            targets: coin,
+            alpha: 0,
+            duration: 400,
+            delay: 800,
+            onComplete: () => coin.destroy()
+        });
+
+        // Add slight rotation and scale animation
+        this.tweens.add({
+            targets: coin,
+            rotation: Math.PI * 2,
+            scaleX: 0.5,
+            scaleY: 0.5,
+            duration: 1200,
+            ease: 'Power1'
+        });
+    }
+
+    // ✅ Update money display on screen
+    updateMoneyDisplay() {
+        if (this.moneyDisplay) {
+            this.moneyDisplay.setText(`💰 ${this.playerMoney}`);
+            
+            // Add a little pulse animation when money increases
+            this.tweens.add({
+                targets: this.moneyDisplay,
+                scaleX: 1.1,
+                scaleY: 1.1,
+                duration: 200,
+                yoyo: true,
+                ease: 'Power2'
+            });
+        }
     }
 
     wakePlayer(playerId) {

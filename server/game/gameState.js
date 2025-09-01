@@ -1,20 +1,9 @@
-let state = {
+const { generateRooms } = require('./rooms');
+
+let gameState = {
     players: {},
-    ghosts: [{ x: 100, y: 100 }]
+    ghosts: [{ x: 100, y: 100 }],
+    rooms: generateRooms(3)
 };
 
-module.exports = {
-    addPlayer: (id) => {
-        state.players[id] = { towers: [] };
-    },
-    removePlayer: (id) => {
-        delete state.players[id];
-    },
-    placeTower: (id, tower) => {
-        if(state.players[id]) state.players[id].towers.push(tower);
-    },
-    updateGhosts: () => {
-        state.ghosts.forEach(g => g.x += 5); // Simple ghost movement
-    },
-    getState: () => state
-};
+module.exports = gameState;
