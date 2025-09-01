@@ -1,10 +1,3 @@
-import { GAME_CONFIG } from '../config/gameConfig.js';
-import { NetworkManager } from '../managers/NetworkManager.js';
-import { UIManager } from '../managers/UIManager.js';
-import { RoomManager } from '../managers/RoomManager.js';
-import { PlayerManager } from '../managers/PlayerManager.js';
-import { BuildMenu } from '../ui/BuildMenu.js';
-
 class RoomSelectScene extends Phaser.Scene {
     constructor() {
         super('RoomSelectScene');

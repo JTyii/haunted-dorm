@@ -152,7 +152,7 @@ class PlayerManager {
             clearInterval(this.moneyTimers[playerId]);
         }
 
-        console.log(`💰 Player ${playerId} started earning money`);
+        //console.log(`💰 Player ${playerId} started earning money`);
         
         this.moneyTimers[playerId] = setInterval(() => {
             if (this.sleeping[playerId]) {

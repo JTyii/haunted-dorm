@@ -1,7 +1,4 @@
-import { GAME_CONFIG } from '../config/gameConfig.js';
-import { SHARED_CONFIG } from '../../../shared/constants.js';
-
-export class BuildMenu {
+class BuildMenu {
     constructor(scene) {
         this.scene = scene;
         this.container = null;

@@ -1,6 +1,4 @@
-import { GAME_CONFIG } from '../config/gameConfig.js';
-
-export class UIManager {
+class UIManager {
     constructor(scene) {
         this.scene = scene;
         this.moneyDisplay = null;
