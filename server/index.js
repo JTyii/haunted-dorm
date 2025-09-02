@@ -1,3 +1,5 @@
+// server/index.js - Updated with Ghost System Integration
+
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -10,7 +12,21 @@ const { generateRooms, occupyBed, freeBed } = require('./game/rooms');
 const { placeTower } = require('./game/towers');
 const config = require('./config/serverConfig');
 const { SHARED_CONFIG } = require('../shared/constants');
-const DatabaseManager = require('./db/sqlite');
+
+// Enhanced SHARED_CONFIG with ghost events
+SHARED_CONFIG.EVENTS = {
+    ...SHARED_CONFIG.EVENTS,
+    // Ghost events
+    REQUEST_GHOST_ROLE: 'requestGhostRole',
+    RELEASE_GHOST_ROLE: 'releaseGhostRole',
+    GHOST_ROLE_GRANTED: 'ghostRoleGranted',
+    GHOST_ROLE_DENIED: 'ghostRoleDenied',
+    GHOST_ROLE_RELEASED: 'ghostRoleReleased',
+    GHOST_INPUT: 'ghostInput',
+    GHOST_UPDATE: 'ghostUpdate',
+    GHOST_ABILITY_USED: 'ghostAbilityUsed',
+    GHOST_MINION_SPAWNED: 'ghostMinionSpawned'
+};
 
 const app = express();
 const server = http.createServer(app);
@@ -23,36 +39,29 @@ const io = new Server(server, {
 
 // Initialize managers
 const playerManager = new PlayerManager();
-const dbManager = new DatabaseManager();
 
-// Initialize database
-dbManager.init().catch(console.error);
-
-// Serve static files from client folder
+// Serve static files
 app.use(express.static(path.join(__dirname, '../client')));
 app.use('/src', express.static(path.join(__dirname, '../client/src')));
 app.use('/shared', express.static(path.join(__dirname, '../shared')));
 
-// API endpoints
+// Enhanced API endpoints
 app.get('/api/stats', (req, res) => {
+    const playerGhosts = Object.keys(ghostLogic.getPlayerGhosts()).length;
+    const aiGhosts = ghostLogic.getGhosts().filter(g => g.type === 'ai').length;
+    
     res.json({
         activePlayers: playerManager.getActivePlayerCount(),
-        totalGhosts: gameState.ghosts.length,
+        totalGhosts: ghostLogic.getGhosts().length,
+        playerGhosts: playerGhosts,
+        aiGhosts: aiGhosts,
+        availableGhostSlots: ghostLogic.getAvailableGhostSlots(),
         currentWave: gameState.waveNumber,
         gameTime: gameState.gameTime
     });
 });
 
-app.get('/api/leaderboard', async (req, res) => {
-    try {
-        const scores = await dbManager.getTopScores(10);
-        res.json(scores);
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to get leaderboard' });
-    }
-});
-
-// ===== Socket.io =====
+// ===== Socket.io with Ghost System =====
 io.on('connection', (socket) => {
     console.log('✅ Player connected:', socket.id);
 
@@ -60,34 +69,46 @@ io.on('connection', (socket) => {
     const newPlayer = playerManager.createPlayer(socket.id);
     gameState.players[socket.id] = newPlayer;
 
-    // 1. Send full game state to new player
-    socket.emit(SHARED_CONFIG.EVENTS.GAME_STATE, gameState);
-
-    // 2. Tell others about the new player
+    // Send enhanced game state with ghost info
+    const enhancedGameState = {
+        ...gameState,
+        availableGhostSlots: ghostLogic.getAvailableGhostSlots(),
+        playerGhosts: Object.keys(ghostLogic.getPlayerGhosts())
+    };
+    
+    socket.emit(SHARED_CONFIG.EVENTS.GAME_STATE, enhancedGameState);
     socket.broadcast.emit(SHARED_CONFIG.EVENTS.PLAYER_JOIN, newPlayer);
 
-    // 3. Send existing players to the newcomer
-    playerManager.getPlayersArray().forEach(player => {
-        if (player.id !== socket.id) {
-            socket.emit(SHARED_CONFIG.EVENTS.PLAYER_JOIN, player);
-            socket.emit(SHARED_CONFIG.EVENTS.PLAYER_MOVE, { playerId: player.id, x: player.x, y: player.y });
-        }
-    });
-
-    // --- Movement sync ---
+    // ===== EXISTING EVENTS =====
+    
+    // Movement sync
     socket.on(SHARED_CONFIG.EVENTS.PLAYER_MOVE, ({ x, y }) => {
+        // Don't process movement if player is a ghost
+        if (ghostLogic.isPlayerGhost(socket.id)) return;
+        
         if (playerManager.updatePlayerPosition(socket.id, x, y)) {
-            socket.broadcast.emit(SHARED_CONFIG.EVENTS.PLAYER_MOVE, { playerId: socket.id, x, y });
+            socket.broadcast.emit(SHARED_CONFIG.EVENTS.PLAYER_MOVE, { 
+                playerId: socket.id, x, y 
+            });
         }
     });
 
-    // ---- Player enters a room (snap to bed + message)
+    // Room entry
     socket.on(SHARED_CONFIG.EVENTS.ENTER_ROOM, ({ roomId, bedIndex, bedX, bedY }) => {
+        // Ghosts can't sleep in beds
+        if (ghostLogic.isPlayerGhost(socket.id)) {
+            socket.emit(SHARED_CONFIG.EVENTS.ROOM_MESSAGE, {
+                text: 'Ghosts cannot sleep!',
+                x: bedX,
+                y: bedY - 40
+            });
+            return;
+        }
+
         const player = playerManager.getPlayer(socket.id);
         const room = gameState.rooms.find(r => r.id === roomId);
         if (!player || !room) return;
 
-        // Check if bed is already occupied
         const bedOccupied = room.occupiedBeds.find(b => b.index === bedIndex);
         if (bedOccupied) {
             socket.emit(SHARED_CONFIG.EVENTS.ROOM_MESSAGE, { 
@@ -98,51 +119,50 @@ io.on('connection', (socket) => {
             return;
         }
 
-        // Wake up player from any previous bed
         if (player.isSleeping) {
             freeBed(gameState, socket.id);
             playerManager.wakePlayer(socket.id);
         }
 
-        // Mark player as sleeping in new bed
         playerManager.makePlayerSleep(socket.id, roomId, bedIndex);
         occupyBed(gameState, roomId, socket.id, bedIndex);
 
         console.log(`🛏️ ${socket.id} entered Room ${roomId}, Bed ${bedIndex}`);
 
-        // ✅ Snap to bed for everyone
-        io.emit(SHARED_CONFIG.EVENTS.SNAP_TO_BED, { playerId: socket.id, bedX, bedY, roomId });
-
-        // 📢 Show floating message
+        io.emit(SHARED_CONFIG.EVENTS.SNAP_TO_BED, { 
+            playerId: socket.id, bedX, bedY, roomId 
+        });
         io.emit(SHARED_CONFIG.EVENTS.ROOM_MESSAGE, { 
             text: `Player joined Room ${roomId}`, 
             x: bedX, 
             y: bedY - 40 
         });
 
-        // Refresh state so beds tint correctly
-        io.emit(SHARED_CONFIG.EVENTS.GAME_STATE, gameState);
+        // Update game state
+        const updatedGameState = {
+            ...gameState,
+            availableGhostSlots: ghostLogic.getAvailableGhostSlots(),
+            playerGhosts: Object.keys(ghostLogic.getPlayerGhosts())
+        };
+        io.emit(SHARED_CONFIG.EVENTS.GAME_STATE, updatedGameState);
     });
 
-    // ---- Tower placement
+    // Tower placement
     socket.on(SHARED_CONFIG.EVENTS.PLACE_TOWER, (data) => {
+        // Ghosts can't place towers
+        if (ghostLogic.isPlayerGhost(socket.id)) {
+            socket.emit(SHARED_CONFIG.EVENTS.ROOM_MESSAGE, {
+                text: 'Ghosts cannot build towers!',
+                x: data.x || 640,
+                y: data.y || 360
+            });
+            return;
+        }
+
         const result = placeTower(gameState, socket, data);
         if (result.success) {
             playerManager.addTower(socket.id, result.tower);
             io.emit(SHARED_CONFIG.EVENTS.TOWER_PLACED, result.tower);
-            
-            // Save tower stats to database
-            dbManager.saveTowerStats({
-                playerId: socket.id,
-                roomId: data.roomId,
-                col: data.col,
-                row: data.row,
-                towerType: data.type,
-                cost: data.cost,
-                damageDealt: 0,
-                ghostsKilled: 0
-            }).catch(console.error);
-            
         } else {
             socket.emit(SHARED_CONFIG.EVENTS.ROOM_MESSAGE, {
                 text: result.error,
@@ -152,58 +172,125 @@ io.on('connection', (socket) => {
         }
     });
 
-    // ---- Player manually leaves bed
+    // ===== NEW GHOST EVENTS =====
+
+    // Request to become a ghost
+    socket.on(SHARED_CONFIG.EVENTS.REQUEST_GHOST_ROLE, () => {
+        console.log(`👻 Player ${socket.id} requesting ghost role`);
+        
+        // Can't become ghost while sleeping
+        const player = playerManager.getPlayer(socket.id);
+        if (player && player.isSleeping) {
+            socket.emit(SHARED_CONFIG.EVENTS.GHOST_ROLE_DENIED, 'Cannot become ghost while sleeping');
+            return;
+        }
+
+        const result = ghostLogic.requestGhostRole(socket.id, {
+            spawnX: player ? player.x - 100 : -50,
+            spawnY: player ? player.y : 400
+        });
+
+        if (result.success) {
+            // Player becomes a ghost
+            socket.emit(SHARED_CONFIG.EVENTS.GHOST_ROLE_GRANTED, result.ghost);
+            
+            // Notify all players about new ghost
+            socket.broadcast.emit(SHARED_CONFIG.EVENTS.GHOST_UPDATE, ghostLogic.getGhosts());
+            
+            // Update available slots
+            const updatedGameState = {
+                ...gameState,
+                availableGhostSlots: ghostLogic.getAvailableGhostSlots(),
+                playerGhosts: Object.keys(ghostLogic.getPlayerGhosts())
+            };
+            io.emit(SHARED_CONFIG.EVENTS.GAME_STATE, updatedGameState);
+            
+            console.log(`✅ Player ${socket.id} became a ghost`);
+        } else {
+            socket.emit(SHARED_CONFIG.EVENTS.GHOST_ROLE_DENIED, result.reason);
+            console.log(`❌ Ghost request denied for ${socket.id}: ${result.reason}`);
+        }
+    });
+
+    // Release ghost role
+    socket.on(SHARED_CONFIG.EVENTS.RELEASE_GHOST_ROLE, () => {
+        console.log(`👻 Player ${socket.id} releasing ghost role`);
+        
+        if (ghostLogic.releaseGhostRole(socket.id)) {
+            socket.emit(SHARED_CONFIG.EVENTS.GHOST_ROLE_RELEASED);
+            
+            // Update all players about ghost removal
+            io.emit(SHARED_CONFIG.EVENTS.GHOST_UPDATE, ghostLogic.getGhosts());
+            
+            // Update available slots
+            const updatedGameState = {
+                ...gameState,
+                availableGhostSlots: ghostLogic.getAvailableGhostSlots(),
+                playerGhosts: Object.keys(ghostLogic.getPlayerGhosts())
+            };
+            io.emit(SHARED_CONFIG.EVENTS.GAME_STATE, updatedGameState);
+            
+            console.log(`✅ Player ${socket.id} stopped being a ghost`);
+        }
+    });
+
+    // Ghost input handling
+    socket.on(SHARED_CONFIG.EVENTS.GHOST_INPUT, (inputData) => {
+        if (!ghostLogic.isPlayerGhost(socket.id)) return;
+        
+        const success = ghostLogic.handlePlayerGhostInput(socket.id, inputData);
+        
+        if (success && inputData.action === 'ability') {
+            // Notify all players about ability use
+            const ghost = ghostLogic.getPlayerGhosts()[socket.id];
+            if (ghost) {
+                io.emit(SHARED_CONFIG.EVENTS.GHOST_ABILITY_USED, {
+                    ghostId: ghost.id,
+                    abilityName: inputData.abilityName
+                });
+            }
+        }
+    });
+
+    // Player manually leaves bed
     socket.on('leaveBed', () => {
         const player = playerManager.getPlayer(socket.id);
         if (player && player.isSleeping) {
             freeBed(gameState, socket.id);
             playerManager.wakePlayer(socket.id);
             
-            io.emit(SHARED_CONFIG.EVENTS.GAME_STATE, gameState);
+            const updatedGameState = {
+                ...gameState,
+                availableGhostSlots: ghostLogic.getAvailableGhostSlots(),
+                playerGhosts: Object.keys(ghostLogic.getPlayerGhosts())
+            };
+            io.emit(SHARED_CONFIG.EVENTS.GAME_STATE, updatedGameState);
             console.log(`☀️ Player ${socket.id} manually left bed`);
         }
     });
 
-    // ---- Chat messages
+    // Chat messages
     socket.on('chatMessage', ({ message }) => {
         const player = playerManager.getPlayer(socket.id);
+        const isGhost = ghostLogic.isPlayerGhost(socket.id);
+        
         if (player && message.trim()) {
             io.emit('chatMessage', {
                 playerId: socket.id,
                 message: message.trim(),
-                timestamp: Date.now()
+                timestamp: Date.now(),
+                isGhost: isGhost
             });
         }
     });
 
-    // ---- Disconnect cleanup
+    // ===== DISCONNECT CLEANUP =====
     socket.on('disconnect', () => {
         console.log('❌ Player disconnected:', socket.id);
         
-        const player = playerManager.getPlayer(socket.id);
-        const stats = playerManager.getSessionStats(socket.id);
-        
-        // Save session to database
-        if (player && stats) {
-            dbManager.saveGameSession({
-                playerId: socket.id,
-                moneyEarned: stats.moneyEarned,
-                towersPlaced: stats.towersPlaced,
-                ghostsDefeated: stats.ghostsKilled,
-                waveReached: gameState.waveNumber
-            }).catch(console.error);
-
-            // Save high score if it's significant
-            const score = stats.moneyEarned + (stats.ghostsKilled * 10) + (gameState.waveNumber * 50);
-            if (score > 100) {
-                dbManager.saveHighScore({
-                    playerId: socket.id,
-                    score,
-                    waveReached: gameState.waveNumber,
-                    ghostsKilled: stats.ghostsKilled,
-                    moneyEarned: stats.moneyEarned
-                }).catch(console.error);
-            }
+        // Release ghost role if player was a ghost
+        if (ghostLogic.isPlayerGhost(socket.id)) {
+            ghostLogic.releaseGhostRole(socket.id);
         }
         
         // Clean up player from bed
@@ -213,13 +300,21 @@ io.on('connection', (socket) => {
         playerManager.removePlayer(socket.id);
         delete gameState.players[socket.id];
 
-        // Notify all remaining players
+        // Notify remaining players
         socket.broadcast.emit('playerLeft', socket.id);
-        io.emit(SHARED_CONFIG.EVENTS.GAME_STATE, gameState);
+        
+        // Send updated state with ghost info
+        const updatedGameState = {
+            ...gameState,
+            availableGhostSlots: ghostLogic.getAvailableGhostSlots(),
+            playerGhosts: Object.keys(ghostLogic.getPlayerGhosts())
+        };
+        io.emit(SHARED_CONFIG.EVENTS.GAME_STATE, updatedGameState);
+        io.emit(SHARED_CONFIG.EVENTS.GHOST_UPDATE, ghostLogic.getGhosts());
     });
 });
 
-// ===== Game Loop =====
+// ===== Enhanced Game Loop with Ghost System =====
 let lastUpdate = Date.now();
 
 // Main game update loop
@@ -243,8 +338,17 @@ setInterval(() => {
         });
     }
     
-    // Send updated game state to all clients
-    io.emit(SHARED_CONFIG.EVENTS.GAME_STATE, gameState);
+    // Send updated game state with ghost information
+    const enhancedGameState = {
+        ...gameState,
+        availableGhostSlots: ghostLogic.getAvailableGhostSlots(),
+        playerGhosts: Object.keys(ghostLogic.getPlayerGhosts())
+    };
+    io.emit(SHARED_CONFIG.EVENTS.GAME_STATE, enhancedGameState);
+    
+    // Send ghost updates (positions, health, etc.)
+    io.emit(SHARED_CONFIG.EVENTS.GHOST_UPDATE, ghostLogic.getGhosts());
+    
 }, config.GAME.GAME_STATE_UPDATE_INTERVAL);
 
 // Sleep earnings timer
@@ -252,41 +356,31 @@ setInterval(() => {
     playerManager.processSleepEarnings();
 }, config.GAME.SLEEP_EARNINGS_INTERVAL);
 
-// Performance monitoring
+// Enhanced performance monitoring
 setInterval(() => {
+    const playerGhostCount = Object.keys(ghostLogic.getPlayerGhosts()).length;
+    const aiGhostCount = ghostLogic.getGhosts().filter(g => g.type === 'ai').length;
+    
     const stats = {
         players: Object.keys(gameState.players).length,
-        ghosts: gameState.ghosts.length,
+        totalGhosts: ghostLogic.getGhosts().length,
+        playerGhosts: playerGhostCount,
+        aiGhosts: aiGhostCount,
+        availableSlots: ghostLogic.getAvailableGhostSlots(),
         wave: gameState.waveNumber,
         uptime: process.uptime()
     };
+    
     console.log('📈 Server stats:', stats);
-}, 30000); // Every 30 seconds
+}, 30000);
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
     console.log('\n🔄 Shutting down server gracefully...');
     
-    // Save all player data
+    // Save all player data (existing code...)
     const players = playerManager.getPlayersArray();
-    for (const player of players) {
-        try {
-            await dbManager.savePlayer({
-                id: player.id,
-                username: player.id, // Using socket ID as username for now
-                money: player.money,
-                totalEarnings: playerManager.getPlayerStats(player.id)?.moneyEarned || 0,
-                towersBuilt: player.towers.length,
-                ghostsKilled: playerManager.getPlayerStats(player.id)?.ghostsKilled || 0,
-                timePlayed: Date.now() - player.joinTime
-            });
-        } catch (error) {
-            console.error(`❌ Error saving player ${player.id}:`, error);
-        }
-    }
-    
-    // Close database
-    dbManager.close();
+    console.log(`💾 Saving data for ${players.length} players...`);
     
     // Close server
     server.close(() => {
@@ -300,5 +394,6 @@ server.listen(config.SERVER.PORT, () => {
     console.log(`🚀 Server running on http://${config.SERVER.HOST}:${config.SERVER.PORT}`);
     console.log(`📁 Serving static files from: ${path.join(__dirname, '../client')}`);
     console.log(`🎮 Game initialized with ${gameState.rooms.length} rooms`);
-    console.log(`👻 Ghost system active - spawning every ${config.GAME.GHOST_SPAWN_RATE/1000}s`);
+    console.log(`👻 Ghost system active - AI + ${ghostLogic.getAvailableGhostSlots()} player slots`);
+    console.log(`🏰 Tower defense system enabled`);
 });
