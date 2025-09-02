@@ -1,4 +1,6 @@
-// Load configuration
+console.log('🎮 Initializing Haunted Dorm Client...');
+
+// Global configuration
 const GAME_CONFIG = {
     SCREEN: {
         WIDTH: 1280,
@@ -52,15 +54,104 @@ const GAME_CONFIG = {
     }
 };
 
-const config = {
-    type: Phaser.AUTO,
-    width: GAME_CONFIG.SCREEN.WIDTH,
-    height: GAME_CONFIG.SCREEN.HEIGHT,
-    physics: {
-        default: GAME_CONFIG.PHYSICS.DEFAULT,
-        arcade: { debug: GAME_CONFIG.PHYSICS.DEBUG }
-    },
-    scene: [RoomSelectScene] // RoomSelectScene will be loaded via script tag
-};
+// Export globally (optional)
+window.GAME_CONFIG = GAME_CONFIG;
 
-new Phaser.Game(config);
+// Wait for dependencies
+document.addEventListener('DOMContentLoaded', function() {
+    if (typeof Phaser === 'undefined') {
+        console.error('❌ Phaser not loaded!');
+        return;
+    }
+    if (typeof io === 'undefined') {
+        console.error('❌ Socket.IO not loaded!');
+        return;
+    }
+    
+    console.log('✅ All dependencies loaded');
+    initializeGame();
+});
+
+function initializeGame() {
+    const config = {
+        type: Phaser.AUTO,
+        width: GAME_CONFIG.SCREEN.WIDTH,
+        height: GAME_CONFIG.SCREEN.HEIGHT,
+        backgroundColor: '#1a1a2e',
+        physics: {
+            default: GAME_CONFIG.PHYSICS.DEFAULT,
+            arcade: { 
+                debug: GAME_CONFIG.PHYSICS.DEBUG,
+                gravity: { y: 0 }
+            }
+        },
+        scene: [
+            BootScene,
+            LobbyScene, 
+            RoomSelectScene,
+            GameScene
+        ],
+        scale: {
+            mode: Phaser.Scale.FIT,
+            autoCenter: Phaser.Scale.CENTER_BOTH,
+            min: { width: 800, height: 450 },
+            max: { width: 1920, height: 1080 }
+        },
+        input: { keyboard: true, mouse: true },
+        render: { antialias: true, pixelArt: false }
+    };
+
+    console.log('🚀 Starting Phaser game...');
+    
+    try {
+        const game = new Phaser.Game(config);
+        window.game = game;
+        window.DEBUG_MODE = false;
+        
+        console.log('✅ Game initialized successfully!');
+        
+        window.addEventListener('error', (event) => {
+            console.error('💥 Global error:', event.error);
+        });
+        window.addEventListener('unhandledrejection', (event) => {
+            console.error('💥 Unhandled promise rejection:', event.reason);
+        });
+        
+    } catch (error) {
+        console.error('💥 Failed to initialize game:', error);
+        showErrorMessage('Failed to start game. Please refresh the page.');
+    }
+}
+
+function showErrorMessage(message) {
+    const errorDiv = document.createElement('div');
+    errorDiv.style.cssText = `
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: #ff4444;
+        color: white;
+        padding: 20px;
+        border-radius: 8px;
+        font-family: Arial, sans-serif;
+        font-size: 16px;
+        text-align: center;
+        z-index: 9999;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    `;
+    errorDiv.innerHTML = `
+        <h3>⚠️ Error</h3>
+        <p>${message}</p>
+        <button onclick="location.reload()" style="
+            background: white; 
+            color: #ff4444; 
+            border: none; 
+            padding: 8px 16px; 
+            border-radius: 4px; 
+            cursor: pointer;
+            margin-top: 10px;
+        ">Refresh Page</button>
+    `;
+    document.body.appendChild(errorDiv);
+}
