@@ -48,71 +48,60 @@ class LobbyScene extends Phaser.Scene {
     }
 
     initializeManagers() {
-        try {
-            // Initialize UI manager first
-            this.uiManager = new UIManager(this);
-            
-            // Initialize network manager with enhanced error handling
-            this.networkManager = new NetworkManager(this);
-            
-            // Setup networking with timeout
-            this.setupNetworkEvents();
-            
-            // Attempt to join lobby after managers are ready
-            this.time.delayedCall(1000, () => {
-                this.attemptLobbyConnection();
-            });
-            
-        } catch (error) {
-            console.error('Failed to initialize managers:', error);
-            this.showInitializationError(error);
-        }
-    }
-
-    attemptLobbyConnection() {
-        if (!this.networkManager) {
-            console.error('NetworkManager not initialized');
-            this.showConnectionError('Network manager failed to initialize');
-            return;
-        }
-
-        if (!this.networkManager.isConnected()) {
-            console.log('⏳ Waiting for connection before joining lobby...');
-            this.updateConnectionStatus('Connecting to server...', 'connecting');
-            
-            // Wait for connection with timeout
-            const maxWaitTime = 10000; // 10 seconds
-            const checkInterval = 500; // Check every 500ms
-            let waitTime = 0;
-            
-            const connectionCheck = setInterval(() => {
-                waitTime += checkInterval;
-                
-                if (this.networkManager.isConnected()) {
-                    clearInterval(connectionCheck);
-                    this.onConnectionEstablished();
-                } else if (waitTime >= maxWaitTime) {
-                    clearInterval(connectionCheck);
-                    this.onConnectionTimeout();
-                }
-            }, checkInterval);
-        } else {
+    try {
+        // Initialize UI manager first
+        this.uiManager = new UIManager(this);
+        
+        // Initialize network manager with enhanced error handling
+        this.networkManager = new NetworkManager(this);
+        
+        // Register connection callbacks
+        this.networkManager.onConnection(() => {
+            console.log('Network connection callback triggered');
             this.onConnectionEstablished();
-        }
+        });
+        
+        this.networkManager.onDisconnection((reason) => {
+            console.log('Network disconnection callback triggered:', reason);
+            this.onConnectionLost(reason);
+        });
+        
+        // Attempt to join lobby after managers are ready
+        this.time.delayedCall(1000, () => {
+            this.attemptLobbyConnection();
+        });
+        
+    } catch (error) {
+        console.error('Failed to initialize managers:', error);
+        this.showInitializationError(error);
+    }
+}
+
+    async attemptLobbyConnection() {
+    if (!this.networkManager) {
+        console.error('NetworkManager not initialized');
+        this.showConnectionError('Network manager failed to initialize');
+        return;
     }
 
-    onConnectionEstablished() {
-        console.log('✅ Connection established, joining lobby');
+    try {
+        this.updateConnectionStatus('Connecting to lobby...', 'connecting');
+        
+        // Use the new async joinLobby method
+        const lobbyData = await this.networkManager.joinLobby();
+        
+        console.log('✅ Successfully joined lobby');
         this.updateConnectionStatus('Connected', 'connected');
         this.connectionState = 'connected';
         this.connectionRetries = 0;
         
-        // Join lobby
-        this.networkManager.joinLobby();
-    }
-
-    onConnectionTimeout() {
-        console.error('❌ Connection timeout');
+        // Update lobby display with initial data
+        if (lobbyData) {
+            this.updatePlayerList(lobbyData);
+        }
+        
+    } catch (error) {
+        console.error('❌ Failed to join lobby:', error);
         this.connectionState = 'failed';
         this.updateConnectionStatus('Connection failed', 'failed');
         
@@ -123,6 +112,61 @@ class LobbyScene extends Phaser.Scene {
             this.showConnectionError('Unable to connect to server. Please check your internet connection and try again.');
         }
     }
+}
+
+    // 3. Add the onConnectionEstablished method:
+onConnectionEstablished() {
+    console.log('✅ Connection established');
+    this.updateConnectionStatus('Connected', 'connected');
+    this.connectionState = 'connected';
+    this.connectionRetries = 0;
+    
+    // Update UI elements for connected state
+    this.updateReadyButton();
+    this.updateStartButton();
+}
+
+// 4. Add the onConnectionLost method:
+onConnectionLost(reason) {
+    console.log('❌ Connection lost:', reason);
+    this.connectionState = 'disconnected';
+    this.updateConnectionStatus('Disconnected', 'failed');
+    
+    // Update UI elements for disconnected state
+    this.updateReadyButton();
+    this.updateStartButton();
+    
+    // Clear lobby data
+    this.lobbyData = {};
+    this.updatePlayerList({ players: {}, playerCount: 0, ghostCount: 0, readyCount: 0 });
+}
+
+// 5. Add role selection event handlers:
+onRoleSelected(data) {
+    console.log('Role selection confirmed:', data.role);
+    
+    // Update local state to match server
+    this.selectedRole = data.role;
+    this.updateRoleSelection();
+    
+    // Show confirmation message
+    if (this.uiManager) {
+        this.uiManager.showMessage(
+            `Role selected: ${data.role === SHARED_CONFIG.ROLES.GHOST ? 'Ghost' : 'Defender'}`,
+            GAME_CONFIG.SCREEN.WIDTH / 2,
+            GAME_CONFIG.SCREEN.HEIGHT / 2 + 100,
+            2000 // Show for 2 seconds
+        );
+    }
+}
+
+onReadyStatusUpdated(data) {
+    console.log('Ready status confirmed:', data.ready);
+    
+    // Update local state to match server
+    this.isReady = data.ready;
+    this.updateReadyButton();
+}
 
     showLoadingIndicator() {
         const { WIDTH, HEIGHT } = GAME_CONFIG.SCREEN;
@@ -433,42 +477,51 @@ class LobbyScene extends Phaser.Scene {
         }
     }
 
-    selectRole(roleType) {
-        if (this.selectedRole === roleType) return;
-        
-        // Check connection
-        if (this.connectionState !== 'connected') {
-            this.showConnectionRequiredMessage();
+    // 6. Update the selectRole method to use new NetworkManager:
+selectRole(roleType) {
+    if (this.selectedRole === roleType) return;
+    
+    // Check connection
+    if (this.connectionState !== 'connected') {
+        this.showConnectionRequiredMessage();
+        return;
+    }
+    
+    // Check ghost slot availability
+    if (roleType === SHARED_CONFIG.ROLES.GHOST) {
+        const currentGhosts = this.lobbyData.ghostCount || 0;
+        if (currentGhosts >= this.maxGhosts) {
+            this.uiManager.showMessage(
+                'Ghost slots are full!', 
+                GAME_CONFIG.SCREEN.WIDTH/2, 
+                GAME_CONFIG.SCREEN.HEIGHT/2 - 50
+            );
             return;
         }
-        
-        // Check ghost slot availability
-        if (roleType === SHARED_CONFIG.ROLES.GHOST) {
-            const currentGhosts = this.lobbyData.ghostCount || 0;
-            if (currentGhosts >= this.maxGhosts) {
-                this.uiManager.showMessage(
-                    'Ghost slots are full!', 
-                    GAME_CONFIG.SCREEN.WIDTH/2, 
-                    GAME_CONFIG.SCREEN.HEIGHT/2 - 50
-                );
-                return;
-            }
-        }
-
-        this.selectedRole = roleType;
-        this.updateRoleSelection();
-        this.networkManager.sendRoleSelection(roleType);
-        
-        // Automatically unready when changing roles
-        if (this.isReady) {
-            this.toggleReady();
-        }
-        
-        // Sound effect (if available)
-        if (this.sound.sounds.length > 0) {
-            this.sound.play('select', { volume: 0.5 });
-        }
     }
+
+    // Send role selection to server
+    const success = this.networkManager.sendRoleSelection(roleType);
+    if (!success) {
+        console.error('Failed to send role selection');
+        this.showConnectionRequiredMessage();
+        return;
+    }
+    
+    // Optimistically update UI (server will confirm)
+    this.selectedRole = roleType;
+    this.updateRoleSelection();
+    
+    // Automatically unready when changing roles
+    if (this.isReady) {
+        this.toggleReady();
+    }
+    
+    // Sound effect (if available)
+    if (this.sound.sounds.length > 0) {
+        this.sound.play('select', { volume: 0.5 });
+    }
+}
 
     updateRoleSelection() {
         if (!this.roleCards) return;
@@ -578,16 +631,29 @@ class LobbyScene extends Phaser.Scene {
         });
     }
 
-    toggleReady() {
-        this.isReady = !this.isReady;
-        this.updateReadyButton();
-        
-        if (this.networkManager && this.networkManager.isConnected()) {
-            this.networkManager.sendReadyStatus(this.isReady);
-        }
-        
-        console.log(`Ready status: ${this.isReady}`);
+    // 7. Update the toggleReady method:
+toggleReady() {
+    if (this.connectionState !== 'connected') {
+        this.showConnectionRequiredMessage();
+        return;
     }
+    
+    const newReadyState = !this.isReady;
+    
+    // Send to server
+    const success = this.networkManager.sendReadyStatus(newReadyState);
+    if (!success) {
+        console.error('Failed to send ready status');
+        this.showConnectionRequiredMessage();
+        return;
+    }
+    
+    // Optimistically update UI (server will confirm)
+    this.isReady = newReadyState;
+    this.updateReadyButton();
+    
+    console.log(`Ready status: ${this.isReady}`);
+}
 
     updateReadyButton() {
         if (this.connectionState !== 'connected') {
@@ -636,7 +702,14 @@ class LobbyScene extends Phaser.Scene {
         this.playerList = [];
     }
 
-    updatePlayerList(lobbyData) {
+    // 9. Update the updatePlayerList method with better error handling:
+updatePlayerList(lobbyData) {
+    if (!lobbyData) {
+        console.warn('No lobby data provided to updatePlayerList');
+        return;
+    }
+    
+    try {
         this.lobbyData = lobbyData;
         
         // Clear existing list
@@ -662,6 +735,8 @@ class LobbyScene extends Phaser.Scene {
         let yOffset = 0;
         
         Object.values(players).forEach((player, index) => {
+            if (!player) return; // Skip null/undefined players
+            
             const playerItem = this.add.container(50, this.playerListContainer.y + 30 + yOffset);
             
             // Player role icon and color
@@ -698,7 +773,18 @@ class LobbyScene extends Phaser.Scene {
         
         // Hide loading indicator once we receive lobby data
         this.hideLoadingIndicator();
+        
+    } catch (error) {
+        console.error('Error updating player list:', error);
+        if (this.uiManager) {
+            this.uiManager.showMessage(
+                'Error updating player list',
+                GAME_CONFIG.SCREEN.WIDTH / 2,
+                100
+            );
+        }
     }
+}
 
     createStartButton() {
         const { WIDTH, HEIGHT } = GAME_CONFIG.SCREEN;
@@ -802,86 +888,24 @@ class LobbyScene extends Phaser.Scene {
         }).setOrigin(1, 0);
     }
 
-    setupNetworkEvents() {
-        if (!this.networkManager || !this.networkManager.socket) {
-            console.error('NetworkManager or socket not available');
-            return;
-        }
-
-        // Connection status events
-        this.networkManager.socket.on(SHARED_CONFIG.EVENTS.CONNECTION, () => {
-            console.log('✅ Connected to lobby');
-            this.onConnectionEstablished();
-        });
-        
-        this.networkManager.socket.on(SHARED_CONFIG.EVENTS.DISCONNECTION, (reason) => {
-            console.log('❌ Disconnected from lobby:', reason);
-            this.connectionState = 'disconnected';
-            this.updateConnectionStatus('Disconnected', 'failed');
-            this.updateReadyButton();
-            this.updateStartButton();
-            
-            if (reason !== 'io client disconnect') {
-                this.showConnectionError('Connection lost. Attempting to reconnect...');
-            }
-        });
-
-        this.networkManager.socket.on(SHARED_CONFIG.EVENTS.CONNECTION_ERROR, (error) => {
-            console.error('Connection error:', error);
-            this.connectionState = 'failed';
-            this.updateConnectionStatus('Connection Error', 'failed');
-            this.onConnectionTimeout();
-        });
-
-        // Lobby events
-        this.networkManager.socket.on(SHARED_CONFIG.EVENTS.LOBBY_UPDATE, (data) => {
-            console.log('📊 Lobby update:', data);
-            this.updatePlayerList(data);
-        });
-        
-        // Role selection events
-        this.networkManager.socket.on(SHARED_CONFIG.EVENTS.ROLE_SELECTED, (data) => {
-            console.log(`✅ Role selection confirmed: ${data.role}`);
-        });
-
-        this.networkManager.socket.on(SHARED_CONFIG.EVENTS.ROLE_SELECTION_FAILED, (data) => {
-            console.log(`❌ Role selection failed: ${data.reason}`);
-            this.uiManager.showMessage(
-                data.reason, 
-                GAME_CONFIG.SCREEN.WIDTH/2, 
-                GAME_CONFIG.SCREEN.HEIGHT/2 - 50
-            );
-        });
-
-        // Ready status events
-        this.networkManager.socket.on(SHARED_CONFIG.EVENTS.READY_STATUS_UPDATED, (data) => {
-            console.log(`✅ Ready status updated: ${data.ready}`);
-        });
-        
-        // Game start events
-        this.networkManager.socket.on(SHARED_CONFIG.EVENTS.GAME_STARTING, (data) => {
-            this.gameStarted = true;
-            this.startGameCountdown(data.countdown || SHARED_CONFIG.LOBBY.COUNTDOWN_DURATION || 3);
-        });
-        
-        this.networkManager.socket.on(SHARED_CONFIG.EVENTS.GAME_STARTED, (data) => {
-            console.log('🎮 Game started! My role:', data.playerRole);
-            this.scene.start('RoomSelectScene', { 
-                playerRole: data.playerRole,
-                gameData: data 
-            });
-        });
-
-        // Error handling
-        this.networkManager.socket.on(SHARED_CONFIG.EVENTS.ERROR, (error) => {
-            console.error('Server error:', error);
-            this.uiManager.showMessage(
-                `Error: ${error.message || error}`,
-                GAME_CONFIG.SCREEN.WIDTH / 2,
-                100
-            );
-        });
+    // 8. Update the setupNetworkEvents method to be cleaner:
+setupNetworkEvents() {
+    if (!this.networkManager || !this.networkManager.socket) {
+        console.error('NetworkManager or socket not available');
+        return;
     }
+
+    console.log('📡 Setting up network events for lobby');
+    
+    // Note: Most events are already handled in NetworkManager
+    // Only add scene-specific handlers here if needed
+    
+    // Add any additional custom event handlers here
+    this.networkManager.socket.on('custom_lobby_event', (data) => {
+        // Handle custom events specific to lobby
+        console.log('Custom lobby event:', data);
+    });
+}
 
     startGameCountdown(seconds) {
         this.startButtonText.setText(`STARTING IN ${seconds}...`);
@@ -1006,40 +1030,107 @@ class LobbyScene extends Phaser.Scene {
         errorContainer.add([bg, title, message, menuButton, menuText]);
     }
 
-    // Clean up when scene is destroyed
-    destroy() {
-        console.log('🗑️ Destroying LobbyScene');
-        
-        // Destroy network manager
-        if (this.networkManager) {
-            this.networkManager.destroy();
-        }
-        
-        // Clean up UI elements
-        if (this.rolePreview) {
-            this.rolePreview.destroy();
-        }
-        if (this.errorMessage) {
-            this.errorMessage.destroy();
-        }
-        if (this.retryDialog) {
-            this.retryDialog.destroy();
-        }
-        if (this.loadingIndicator) {
-            this.loadingIndicator.destroy();
-        }
-        
-        // Clear player list
-        if (this.playerList) {
-            this.playerList.forEach(item => {
-                if (item && item.destroy) item.destroy();
-            });
-            this.playerList = [];
-        }
-        
-        // Stop any running tweens
-        this.tweens.killAll();
+    // 10. Update the destroy method to properly clean up:
+destroy() {
+    console.log('🗑️ Destroying LobbyScene');
+    
+    // Destroy network manager first
+    if (this.networkManager) {
+        this.networkManager.destroy();
+        this.networkManager = null;
     }
+    
+    // Clean up UI elements
+    if (this.rolePreview) {
+        this.rolePreview.destroy();
+        this.rolePreview = null;
+    }
+    if (this.errorMessage) {
+        this.errorMessage.destroy();
+        this.errorMessage = null;
+    }
+    if (this.retryDialog) {
+        this.retryDialog.destroy();
+        this.retryDialog = null;
+    }
+    if (this.loadingIndicator) {
+        this.loadingIndicator.destroy();
+        this.loadingIndicator = null;
+    }
+    
+    // Clear player list
+    if (this.playerList) {
+        this.playerList.forEach(item => {
+            if (item && item.destroy) item.destroy();
+        });
+        this.playerList = [];
+    }
+    
+    // Stop any running tweens
+    this.tweens.killAll();
+    
+    // Clear any remaining timeouts
+    if (this.connectionTimeoutId) {
+        clearTimeout(this.connectionTimeoutId);
+    }
+    
+    // Call parent destroy
+    if (super.destroy) {
+        super.destroy();
+    }
+}
+
+// 11. Add a method to handle network status changes:
+handleNetworkStatusChange(status) {
+    switch (status) {
+        case 'connected':
+            this.connectionState = 'connected';
+            this.updateConnectionStatus('Connected', 'connected');
+            break;
+        case 'connecting':
+            this.connectionState = 'connecting';
+            this.updateConnectionStatus('Connecting...', 'connecting');
+            break;
+        case 'disconnected':
+            this.connectionState = 'failed';
+            this.updateConnectionStatus('Disconnected', 'failed');
+            break;
+        case 'reconnecting':
+            this.connectionState = 'connecting';
+            this.updateConnectionStatus('Reconnecting...', 'reconnecting');
+            break;
+    }
+    
+    // Update UI based on connection state
+    this.updateReadyButton();
+    this.updateStartButton();
+}
+
+// 12. Add better error handling for server messages:
+handleServerError(error) {
+    console.error('Server error received:', error);
+    
+    const errorMessage = error.message || error.toString();
+    
+    if (this.uiManager) {
+        this.uiManager.showMessage(
+            `Server Error: ${errorMessage}`,
+            GAME_CONFIG.SCREEN.WIDTH / 2,
+            100,
+            5000 // Show for 5 seconds
+        );
+    }
+    
+    // Handle specific error types
+    if (errorMessage.includes('lobby full')) {
+        this.showConnectionError('Lobby is full. Please try again later.');
+    } else if (errorMessage.includes('game already started')) {
+        this.showConnectionError('Game has already started. Returning to menu.');
+        this.time.delayedCall(3000, () => {
+            this.scene.start('MenuScene');
+        });
+    }
+}
 }
 
 window.LobbyScene = LobbyScene;
