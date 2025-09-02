@@ -1,4 +1,4 @@
-// client/scenes/LobbyScene.js
+// client/scenes/LobbyScene.js - Fixed version
 class LobbyScene extends Phaser.Scene {
     constructor() {
         super('LobbyScene');
@@ -23,14 +23,17 @@ class LobbyScene extends Phaser.Scene {
         
         // Game state
         this.selectedRole = SHARED_CONFIG.ROLES.DEFENDER; // Default role
+        this.isReady = false;
         this.playerCount = 0;
-        this.ghostSlots = 2;
+        this.maxGhosts = 2;
         this.gameStarted = false;
+        this.lobbyData = {};
         
         // Create UI
         this.createBackground();
         this.createTitle();
         this.createRoleSelection();
+        this.createReadyButton();
         this.createPlayerList();
         this.createStartButton();
         this.createInstructions();
@@ -58,15 +61,20 @@ class LobbyScene extends Phaser.Scene {
     createTitle() {
         const { WIDTH } = GAME_CONFIG.SCREEN;
         
-        this.add.text(WIDTH/2, 80, '👻 DORM DEFENSE', {
+        this.add.text(WIDTH/2, 60, '👻 HAUNTED DORM', {
             fontSize: '42px',
             fill: '#ffffff',
             fontStyle: 'bold'
         }).setOrigin(0.5);
         
-        this.add.text(WIDTH/2, 120, 'Choose Your Role', {
+        this.add.text(WIDTH/2, 100, 'Multiplayer Defense', {
             fontSize: '18px',
             fill: '#a8a8a8'
+        }).setOrigin(0.5);
+        
+        this.add.text(WIDTH/2, 125, 'Choose Your Role & Get Ready', {
+            fontSize: '14px',
+            fill: '#888888'
         }).setOrigin(0.5);
     }
 
@@ -74,7 +82,7 @@ class LobbyScene extends Phaser.Scene {
         const { WIDTH, HEIGHT } = GAME_CONFIG.SCREEN;
         
         // Role selection container
-        const roleY = HEIGHT/2 - 50;
+        const roleY = HEIGHT/2 - 80;
         
         // Defender Role Card
         this.createRoleCard(SHARED_CONFIG.ROLES.DEFENDER, WIDTH/2 - 200, roleY, {
@@ -126,9 +134,18 @@ class LobbyScene extends Phaser.Scene {
         const indicator = this.add.circle(x + 140, y - 80, 8, 0x00ff00)
             .setVisible(false);
             
+        // Availability indicator for ghost role
+        let availabilityText = null;
+        if (roleType === SHARED_CONFIG.ROLES.GHOST) {
+            availabilityText = this.add.text(x, y + 85, 'Slots: 2/2', {
+                fontSize: '11px',
+                fill: '#ffaa00'
+            }).setOrigin(0.5);
+        }
+        
         // Store references
         const roleCard = {
-            card, icon, title, desc, indicator,
+            card, icon, title, desc, indicator, availabilityText,
             roleType, x, y, config
         };
         
@@ -158,9 +175,27 @@ class LobbyScene extends Phaser.Scene {
     selectRole(roleType) {
         if (this.selectedRole === roleType) return;
         
+        // Check ghost slot availability
+        if (roleType === SHARED_CONFIG.ROLES.GHOST) {
+            const currentGhosts = this.lobbyData.ghostCount || 0;
+            if (currentGhosts >= this.maxGhosts) {
+                this.uiManager.showMessage(
+                    'Ghost slots are full!', 
+                    GAME_CONFIG.SCREEN.WIDTH/2, 
+                    GAME_CONFIG.SCREEN.HEIGHT/2 - 50
+                );
+                return;
+            }
+        }
+
         this.selectedRole = roleType;
         this.updateRoleSelection();
         this.networkManager.sendRoleSelection(roleType);
+        
+        // Automatically unready when changing roles
+        if (this.isReady) {
+            this.toggleReady();
+        }
         
         // Sound effect (if available)
         if (this.sound.sounds.length > 0) {
@@ -182,6 +217,25 @@ class LobbyScene extends Phaser.Scene {
         });
     }
 
+    updateGhostAvailability() {
+        const ghostCard = this.roleCards[SHARED_CONFIG.ROLES.GHOST];
+        if (!ghostCard || !ghostCard.availabilityText) return;
+        
+        const ghostCount = this.lobbyData.ghostCount || 0;
+        const slotsText = `Slots: ${ghostCount}/${this.maxGhosts}`;
+        
+        ghostCard.availabilityText.setText(slotsText);
+        
+        // Update card availability
+        if (ghostCount >= this.maxGhosts && this.selectedRole !== SHARED_CONFIG.ROLES.GHOST) {
+            ghostCard.card.setAlpha(0.5);
+            ghostCard.card.setFillStyle(0x444444, 0.7);
+        } else {
+            ghostCard.card.setAlpha(1);
+            ghostCard.card.setFillStyle(ghostCard.config.color, 0.9);
+        }
+    }
+
     showRolePreview(roleType) {
         // Show detailed role information
         if (this.rolePreview) {
@@ -196,22 +250,76 @@ class LobbyScene extends Phaser.Scene {
                          '• Build turrets to defend your room\n' +
                          '• Sleep in beds to earn coins\n' +
                          '• Upgrade and repair defenses\n' +
-                         '• Coordinate with other defenders';
+                         '• Coordinate with other defenders\n' +
+                         '• Wake up to move and build';
         } else {
             previewText = 'GHOST ABILITIES:\n\n' +
                          '• Speed Burst - Move faster temporarily\n' +
                          '• Phase Through - Pass through walls\n' +
                          '• Summon Minion - Create helper ghost\n' +
-                         '• Hunt sleeping defenders for money';
+                         '• Hunt sleeping defenders for money\n' +
+                         '• Break through defenses';
         }
         
-        this.rolePreview = this.add.text(WIDTH/2, HEIGHT - 120, previewText, {
+        this.rolePreview = this.add.text(WIDTH/2, HEIGHT - 140, previewText, {
             fontSize: '14px',
             fill: '#ffffff',
             backgroundColor: 'rgba(0,0,0,0.8)',
             padding: { x: 20, y: 15 },
             align: 'left'
         }).setOrigin(0.5);
+    }
+
+    createReadyButton() {
+        const { WIDTH, HEIGHT } = GAME_CONFIG.SCREEN;
+        
+        // Ready button
+        this.readyButton = this.add.rectangle(WIDTH/2, HEIGHT/2 + 50, 200, 50, 0xe74c3c, 0.8)
+            .setStrokeStyle(2, 0xffffff)
+            .setInteractive();
+            
+        this.readyButtonText = this.add.text(WIDTH/2, HEIGHT/2 + 50, 'NOT READY', {
+            fontSize: '16px',
+            fill: '#ffffff',
+            fontStyle: 'bold'
+        }).setOrigin(0.5);
+        
+        // Ready button interactions
+        this.readyButton.on('pointerdown', () => {
+            this.toggleReady();
+        });
+        
+        this.readyButton.on('pointerover', () => {
+            if (this.isReady) {
+                this.readyButton.setFillStyle(0xc0392b);
+            } else {
+                this.readyButton.setFillStyle(0x27ae60);
+            }
+        });
+        
+        this.readyButton.on('pointerout', () => {
+            this.updateReadyButton();
+        });
+    }
+
+    toggleReady() {
+        this.isReady = !this.isReady;
+        this.updateReadyButton();
+        this.networkManager.sendReadyStatus(this.isReady);
+        
+        console.log(`Ready status: ${this.isReady}`);
+    }
+
+    updateReadyButton() {
+        if (this.isReady) {
+            this.readyButton.setFillStyle(0x27ae60, 1);
+            this.readyButtonText.setText('READY ✓');
+            this.readyButtonText.setFill('#ffffff');
+        } else {
+            this.readyButton.setFillStyle(0xe74c3c, 0.8);
+            this.readyButtonText.setText('NOT READY');
+            this.readyButtonText.setFill('#ffffff');
+        }
     }
 
     createPlayerList() {
@@ -228,15 +336,23 @@ class LobbyScene extends Phaser.Scene {
         });
         
         // Ghost slots indicator
-        this.ghostSlotsText = this.add.text(50, HEIGHT/2 + 100, 'Ghost Slots: 2/2', {
+        this.ghostSlotsText = this.add.text(250, HEIGHT/2 + 80, 'Ghost Slots: 0/2', {
             fontSize: '14px',
             fill: '#8844ff'
+        });
+
+        // Ready status indicator
+        this.readyStatusText = this.add.text(400, HEIGHT/2 + 80, 'Ready: 0/0', {
+            fontSize: '14px',
+            fill: '#27ae60'
         });
         
         this.playerList = [];
     }
 
-    updatePlayerList(players, ghostCount = 0) {
+    updatePlayerList(lobbyData) {
+        this.lobbyData = lobbyData;
+        
         // Clear existing list
         this.playerList.forEach(item => {
             if (item && item.destroy) item.destroy();
@@ -244,36 +360,61 @@ class LobbyScene extends Phaser.Scene {
         this.playerList = [];
         
         // Update counters
-        this.playerCount = Object.keys(players || {}).length;
+        this.playerCount = lobbyData.playerCount || 0;
+        const ghostCount = lobbyData.ghostCount || 0;
+        const readyCount = lobbyData.readyCount || 0;
+        
         this.playerCountText.setText(`Players: ${this.playerCount}`);
-        this.ghostSlotsText.setText(`Ghost Slots: ${ghostCount}/${this.ghostSlots}`);
+        this.ghostSlotsText.setText(`Ghost Slots: ${ghostCount}/${this.maxGhosts}`);
+        this.readyStatusText.setText(`Ready: ${readyCount}/${this.playerCount}`);
+        
+        // Update ghost availability
+        this.updateGhostAvailability();
         
         // Create player entries
+        const players = lobbyData.players || {};
         let yOffset = 0;
-        Object.values(players || {}).forEach((player, index) => {
+        
+        Object.values(players).forEach((player, index) => {
             const playerItem = this.add.container(50, this.playerListContainer.y + 30 + yOffset);
             
-            // Player role icon
+            // Player role icon and color
             const roleIcon = player.selectedRole === SHARED_CONFIG.ROLES.GHOST ? '👻' : '🏠';
             const roleColor = player.selectedRole === SHARED_CONFIG.ROLES.GHOST ? '#8844ff' : '#2d5a87';
+            const readyIcon = player.ready ? '✓' : '⏳';
+            const readyColor = player.ready ? '#27ae60' : '#e74c3c';
             
-            // Player entry
-            const playerText = this.add.text(0, 0, `${roleIcon} ${player.name || `Player ${index + 1}`}`, {
+            // Player entry background
+            const bgColor = player.ready ? 0x1e3a1e : 0x3a1e1e;
+            const playerBg = this.add.rectangle(100, 0, 200, 20, bgColor, 0.3)
+                .setStrokeStyle(1, player.ready ? 0x27ae60 : 0xe74c3c, 0.5);
+            
+            // Player text
+            const playerText = this.add.text(20, 0, `${roleIcon} ${player.name || `Player ${index + 1}`}`, {
                 fontSize: '14px',
                 fill: roleColor
-            });
+            }).setOrigin(0, 0.5);
             
-            playerItem.add(playerText);
+            // Ready status
+            const readyText = this.add.text(180, 0, readyIcon, {
+                fontSize: '14px',
+                fill: readyColor
+            }).setOrigin(0.5);
+            
+            playerItem.add([playerBg, playerText, readyText]);
             this.playerList.push(playerItem);
             
             yOffset += 25;
         });
+
+        // Update start button
+        this.updateStartButton();
     }
 
     createStartButton() {
         const { WIDTH, HEIGHT } = GAME_CONFIG.SCREEN;
         
-        this.startButton = this.add.rectangle(WIDTH/2, HEIGHT - 80, 200, 50, 0x27ae60, 0.8)
+        this.startButton = this.add.rectangle(WIDTH/2, HEIGHT - 80, 250, 50, 0x95a5a6, 0.5)
             .setStrokeStyle(2, 0xffffff)
             .setInteractive();
             
@@ -296,45 +437,63 @@ class LobbyScene extends Phaser.Scene {
         });
         
         this.startButton.on('pointerout', () => {
-            this.startButton.setFillStyle(0x27ae60, 0.8);
+            this.updateStartButton();
         });
     }
 
     canStartGame() {
-        return this.playerCount >= 2 && !this.gameStarted;
+        if (!this.lobbyData.canStartGame) return false;
+        if (!this.lobbyData.allPlayersReady) return false;
+        if (this.playerCount < 2) return false;
+        return !this.gameStarted;
     }
 
     updateStartButton() {
+        if (!this.lobbyData) return;
+
         if (this.canStartGame()) {
             this.startButtonText.setText('START GAME');
             this.startButton.setFillStyle(0x27ae60, 1);
             this.startButton.setAlpha(1);
         } else if (this.playerCount < 2) {
-            this.startButtonText.setText('NEED MORE PLAYERS');
+            this.startButtonText.setText('NEED MORE PLAYERS (2+)');
             this.startButton.setFillStyle(0x95a5a6, 0.5);
             this.startButton.setAlpha(0.7);
+        } else if (!this.lobbyData.allPlayersReady) {
+            const readyCount = this.lobbyData.readyCount || 0;
+            this.startButtonText.setText(`WAITING FOR READY (${readyCount}/${this.playerCount})`);
+            this.startButton.setFillStyle(0xf39c12, 0.8);
+            this.startButton.setAlpha(0.8);
         } else if (this.gameStarted) {
             this.startButtonText.setText('STARTING...');
-            this.startButton.setFillStyle(0xf39c12);
+            this.startButton.setFillStyle(0x8e44ad);
             this.startButton.setAlpha(0.8);
+        } else {
+            this.startButtonText.setText('CHECKING REQUIREMENTS...');
+            this.startButton.setFillStyle(0x95a5a6, 0.6);
+            this.startButton.setAlpha(0.7);
         }
     }
 
     createInstructions() {
         const { WIDTH, HEIGHT } = GAME_CONFIG.SCREEN;
         
-        const instructions = 'GAME RULES:\n\n' +
-                           'DEFENDERS: Build defenses, sleep to earn money, survive the ghosts\n' +
-                           'GHOSTS: Hunt defenders, use abilities, steal their money\n\n' +
-                           'Click on a role card to select your preferred role!';
+        const instructions = 'HOW TO PLAY:\n\n' +
+                           '🏠 DEFENDERS: Build defenses, sleep to earn money, survive the ghosts\n' +
+                           '👻 GHOSTS: Hunt defenders, use abilities, steal their money\n\n' +
+                           '1. Choose your role (Defender or Ghost)\n' +
+                           '2. Click READY when you\'re set\n' +
+                           '3. Wait for all players to be ready\n' +
+                           '4. Game starts automatically!\n\n' +
+                           'Note: If no players choose Ghost, AI ghosts will be used.';
         
-        this.add.text(WIDTH - 50, HEIGHT/2 + 100, instructions, {
+        this.add.text(WIDTH - 50, HEIGHT/2, instructions, {
             fontSize: '12px',
             fill: '#cccccc',
             backgroundColor: 'rgba(0,0,0,0.6)',
             padding: { x: 15, y: 15 },
             align: 'left',
-            wordWrap: { width: 300 }
+            wordWrap: { width: 350 }
         }).setOrigin(1, 0);
     }
 
@@ -352,13 +511,27 @@ class LobbyScene extends Phaser.Scene {
         // Lobby updates
         this.networkManager.socket.on(SHARED_CONFIG.EVENTS.LOBBY_UPDATE, (data) => {
             console.log('📊 Lobby update:', data);
-            this.updatePlayerList(data.players, data.ghostCount || 0);
-            this.updateStartButton();
+            this.updatePlayerList(data);
         });
         
         // Role selection confirmed
         this.networkManager.socket.on(SHARED_CONFIG.EVENTS.ROLE_SELECTED, (data) => {
             console.log(`Role selected: ${data.role}`);
+        });
+
+        // Role selection failed
+        this.networkManager.socket.on(SHARED_CONFIG.EVENTS.ROLE_SELECTION_FAILED, (data) => {
+            console.log(`❌ Role selection failed: ${data.reason}`);
+            this.uiManager.showMessage(
+                data.reason, 
+                GAME_CONFIG.SCREEN.WIDTH/2, 
+                GAME_CONFIG.SCREEN.HEIGHT/2 - 50
+            );
+        });
+
+        // Ready status confirmed
+        this.networkManager.socket.on(SHARED_CONFIG.EVENTS.READY_STATUS_UPDATED, (data) => {
+            console.log(`Ready status updated: ${data.ready}`);
         });
         
         // Game starting
@@ -384,7 +557,7 @@ class LobbyScene extends Phaser.Scene {
             seconds--;
             if (seconds <= 0) {
                 clearInterval(countdown);
-                this.startButtonText.setText('LOADING...');
+                this.startButtonText.setText('LOADING GAME...');
             } else {
                 this.startButtonText.setText(`STARTING IN ${seconds}...`);
             }

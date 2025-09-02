@@ -1,4 +1,4 @@
-// client/src/managers/NetworkManager.js
+// client/src/managers/NetworkManager.js - Updated with Ready System
 class NetworkManager {
     constructor(scene) {
         this.scene = scene;
@@ -54,12 +54,20 @@ class NetworkManager {
         // Lobby events
         this.socket.on(SHARED_CONFIG.EVENTS.LOBBY_UPDATE, (data) => {
             if (this.scene.updatePlayerList) {
-                this.scene.updatePlayerList(data.players, data.ghostCount);
+                this.scene.updatePlayerList(data);
             }
         });
 
         this.socket.on(SHARED_CONFIG.EVENTS.ROLE_SELECTED, (data) => {
             console.log('✅ Role selection confirmed:', data.role);
+        });
+
+        this.socket.on(SHARED_CONFIG.EVENTS.ROLE_SELECTION_FAILED, (data) => {
+            console.log('❌ Role selection failed:', data.reason);
+        });
+
+        this.socket.on(SHARED_CONFIG.EVENTS.READY_STATUS_UPDATED, (data) => {
+            console.log('✅ Ready status updated:', data.ready);
         });
 
         this.socket.on(SHARED_CONFIG.EVENTS.GAME_STARTING, (data) => {
@@ -196,7 +204,7 @@ class NetworkManager {
             console.log('💀 Player attacked by ghost:', data);
             if (this.scene.uiManager) {
                 this.scene.uiManager.showMessage(
-                    `Ghost attack! -$${data.damage}`,
+                    `Ghost attack! -${data.damage}`,
                     data.x,
                     data.y
                 );
@@ -207,7 +215,7 @@ class NetworkManager {
             console.log('💀 Ghost killed:', data);
             if (this.scene.uiManager) {
                 this.scene.uiManager.showMessage(
-                    `Ghost eliminated! +$${data.reward}`,
+                    `Ghost eliminated! +${data.reward}`,
                     data.x,
                     data.y
                 );
@@ -232,6 +240,13 @@ class NetworkManager {
         
         this.socket.emit(SHARED_CONFIG.EVENTS.SELECT_ROLE, { role });
         console.log('📤 Sent role selection:', role);
+    }
+
+    sendReadyStatus(ready) {
+        if (!this.connected) return;
+        
+        this.socket.emit(SHARED_CONFIG.EVENTS.SET_READY, { ready });
+        console.log('📤 Sent ready status:', ready);
     }
 
     requestGameStart() {
