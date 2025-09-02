@@ -1,54 +1,127 @@
-// client/src/managers/NetworkManager.js - Updated with Ready System
+// client/src/managers/NetworkManager.js - Updated with Better Connection Handling and New Constants
 class NetworkManager {
     constructor(scene) {
         this.scene = scene;
         this.socket = null;
         this.socketId = null;
         this.connected = false;
+        this.connecting = false;
         this.reconnectAttempts = 0;
-        this.maxReconnectAttempts = 5;
-        this.reconnectDelay = 2000;
+        this.maxReconnectAttempts = SHARED_CONFIG.NETWORK.RECONNECT_ATTEMPTS || 5;
+        this.reconnectDelay = SHARED_CONFIG.NETWORK.RECONNECT_DELAY || 2000;
+        this.connectionTimeout = SHARED_CONFIG.NETWORK.TIMEOUT || 10000;
+        this.lastPingTime = 0;
         
         this.init();
     }
 
     init() {
         try {
-            // Connect to server
-            this.socket = io({
-                transports: ['websocket', 'polling'],
+            console.log('🔗 Initializing NetworkManager...');
+            this.connect();
+        } catch (error) {
+            console.error('Failed to initialize NetworkManager:', error);
+            this.handleConnectionError(error);
+        }
+    }
+
+    connect() {
+        if (this.connecting || this.connected) {
+            console.log('Already connecting or connected');
+            return;
+        }
+
+        this.connecting = true;
+        
+        try {
+            // Determine server URL
+            const serverUrl = this.getServerUrl();
+            console.log('🔗 Connecting to:', serverUrl);
+
+            // Create socket with enhanced configuration
+            this.socket = io(serverUrl, {
+                transports: SHARED_CONFIG.NETWORK.TRANSPORTS || ['websocket', 'polling'],
                 upgrade: true,
                 rememberUpgrade: true,
-                timeout: 10000,
-                forceNew: true
+                timeout: this.connectionTimeout,
+                forceNew: true,
+                reconnection: false, // We'll handle reconnection manually
+                pingInterval: SHARED_CONFIG.NETWORK.PING_INTERVAL || 25000,
+                pingTimeout: SHARED_CONFIG.NETWORK.PING_TIMEOUT || 5000,
+                maxHttpBufferSize: 1e6, // 1MB buffer
+                withCredentials: false,
+                autoConnect: true
             });
 
             this.setupEventListeners();
             
+            // Connection timeout
+            this.connectionTimeoutId = setTimeout(() => {
+                if (!this.connected) {
+                    console.error('❌ Connection timeout');
+                    this.handleConnectionTimeout();
+                }
+            }, this.connectionTimeout);
+            
         } catch (error) {
-            console.error('Failed to initialize NetworkManager:', error);
-            this.handleConnectionError();
+            console.error('Failed to create socket:', error);
+            this.connecting = false;
+            this.handleConnectionError(error);
         }
     }
 
+    getServerUrl() {
+        // Try to detect the server URL
+        if (typeof window !== 'undefined') {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const host = window.location.hostname;
+            const port = window.location.port || (protocol === 'wss:' ? '443' : '80');
+            
+            // For development, check if we're on localhost
+            if (host === 'localhost' || host === '127.0.0.1') {
+                return `http://${host}:3000`; // Default development port
+            }
+            
+            return `${window.location.protocol}//${window.location.host}`;
+        }
+        
+        return 'http://localhost:3000'; // Fallback
+    }
+
     setupEventListeners() {
+        if (!this.socket) return;
+
         // Connection events
-        this.socket.on('connect', () => {
-            this.socketId = this.socket.id;
-            this.connected = true;
-            this.reconnectAttempts = 0;
-            console.log('🔗 Connected to server:', this.socketId);
+        this.socket.on(SHARED_CONFIG.EVENTS.CONNECTION, () => {
+            this.onConnected();
         });
 
-        this.socket.on('disconnect', (reason) => {
-            this.connected = false;
-            console.log('❌ Disconnected from server:', reason);
-            this.handleDisconnection(reason);
+        this.socket.on(SHARED_CONFIG.EVENTS.DISCONNECTION, (reason) => {
+            this.onDisconnected(reason);
         });
 
-        this.socket.on('connect_error', (error) => {
-            console.error('Connection error:', error);
-            this.handleConnectionError();
+        this.socket.on(SHARED_CONFIG.EVENTS.CONNECTION_ERROR, (error) => {
+            this.onConnectionError(error);
+        });
+
+        this.socket.on(SHARED_CONFIG.EVENTS.RECONNECT, (attemptNumber) => {
+            console.log(`🔄 Reconnected after ${attemptNumber} attempts`);
+            this.onConnected();
+        });
+
+        this.socket.on(SHARED_CONFIG.EVENTS.RECONNECT_ERROR, (error) => {
+            console.error('❌ Reconnection error:', error);
+            this.handleReconnectionError();
+        });
+
+        // Ping/Pong for connection monitoring
+        this.socket.on('ping', () => {
+            this.lastPingTime = Date.now();
+        });
+
+        this.socket.on('pong', (latency) => {
+            // Connection is healthy
+            this.lastPingTime = Date.now();
         });
 
         // Lobby events

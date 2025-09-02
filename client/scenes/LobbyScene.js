@@ -1,4 +1,4 @@
-// client/scenes/LobbyScene.js - Fixed version
+// client/scenes/LobbyScene.js - Fixed connection issues and updated to use new constants
 class LobbyScene extends Phaser.Scene {
     constructor() {
         super('LobbyScene');
@@ -12,38 +12,283 @@ class LobbyScene extends Phaser.Scene {
         // Load role preview assets
         this.load.image('defender-preview', GAME_CONFIG.ASSETS.PLAYER);
         this.load.image('ghost-preview', 'https://labs.phaser.io/assets/sprites/enemy-bullet.png');
+
+        // Show loading indicator
+        this.showLoadingIndicator();
     }
 
     create() {
         console.log('👻 Creating LobbyScene');
         
-        // Initialize managers
-        this.networkManager = new NetworkManager(this);
-        this.uiManager = new UIManager(this);
+        // Initialize connection state
+        this.connectionState = 'connecting';
+        this.connectionRetries = 0;
+        this.maxConnectionRetries = SHARED_CONFIG.NETWORK.RECONNECT_ATTEMPTS || 5;
         
         // Game state
         this.selectedRole = SHARED_CONFIG.ROLES.DEFENDER; // Default role
         this.isReady = false;
         this.playerCount = 0;
-        this.maxGhosts = 2;
+        this.maxGhosts = SHARED_CONFIG.LOBBY.MAX_GHOSTS || 2;
         this.gameStarted = false;
         this.lobbyData = {};
         
         // Create UI
         this.createBackground();
         this.createTitle();
+        this.createConnectionStatus();
         this.createRoleSelection();
         this.createReadyButton();
         this.createPlayerList();
         this.createStartButton();
         this.createInstructions();
         
-        // Setup networking
-        this.setupNetworkEvents();
+        // Initialize managers after UI is created
+        this.initializeManagers();
+    }
+
+    initializeManagers() {
+        try {
+            // Initialize UI manager first
+            this.uiManager = new UIManager(this);
+            
+            // Initialize network manager with enhanced error handling
+            this.networkManager = new NetworkManager(this);
+            
+            // Setup networking with timeout
+            this.setupNetworkEvents();
+            
+            // Attempt to join lobby after managers are ready
+            this.time.delayedCall(1000, () => {
+                this.attemptLobbyConnection();
+            });
+            
+        } catch (error) {
+            console.error('Failed to initialize managers:', error);
+            this.showInitializationError(error);
+        }
+    }
+
+    attemptLobbyConnection() {
+        if (!this.networkManager) {
+            console.error('NetworkManager not initialized');
+            this.showConnectionError('Network manager failed to initialize');
+            return;
+        }
+
+        if (!this.networkManager.isConnected()) {
+            console.log('⏳ Waiting for connection before joining lobby...');
+            this.updateConnectionStatus('Connecting to server...', 'connecting');
+            
+            // Wait for connection with timeout
+            const maxWaitTime = 10000; // 10 seconds
+            const checkInterval = 500; // Check every 500ms
+            let waitTime = 0;
+            
+            const connectionCheck = setInterval(() => {
+                waitTime += checkInterval;
+                
+                if (this.networkManager.isConnected()) {
+                    clearInterval(connectionCheck);
+                    this.onConnectionEstablished();
+                } else if (waitTime >= maxWaitTime) {
+                    clearInterval(connectionCheck);
+                    this.onConnectionTimeout();
+                }
+            }, checkInterval);
+        } else {
+            this.onConnectionEstablished();
+        }
+    }
+
+    onConnectionEstablished() {
+        console.log('✅ Connection established, joining lobby');
+        this.updateConnectionStatus('Connected', 'connected');
+        this.connectionState = 'connected';
+        this.connectionRetries = 0;
         
-        // Join lobby after a short delay
-        this.time.delayedCall(500, () => {
-            this.networkManager.joinLobby();
+        // Join lobby
+        this.networkManager.joinLobby();
+    }
+
+    onConnectionTimeout() {
+        console.error('❌ Connection timeout');
+        this.connectionState = 'failed';
+        this.updateConnectionStatus('Connection failed', 'failed');
+        
+        if (this.connectionRetries < this.maxConnectionRetries) {
+            this.connectionRetries++;
+            this.showRetryOption();
+        } else {
+            this.showConnectionError('Unable to connect to server. Please check your internet connection and try again.');
+        }
+    }
+
+    showLoadingIndicator() {
+        const { WIDTH, HEIGHT } = GAME_CONFIG.SCREEN;
+        
+        if (this.loadingIndicator) {
+            this.loadingIndicator.destroy();
+        }
+        
+        this.loadingIndicator = this.add.container(WIDTH/2, HEIGHT/2);
+        
+        const bg = this.add.rectangle(0, 0, 200, 100, 0x000000, 0.8)
+            .setStrokeStyle(2, 0x333333);
+        
+        const text = this.add.text(0, -10, 'Loading Lobby...', {
+            fontSize: '16px',
+            fill: '#ffffff'
+        }).setOrigin(0.5);
+        
+        const spinner = this.add.text(0, 20, '⟳', {
+            fontSize: '24px',
+            fill: '#ffffff'
+        }).setOrigin(0.5);
+        
+        this.loadingIndicator.add([bg, text, spinner]);
+        
+        // Animate spinner
+        this.tweens.add({
+            targets: spinner,
+            rotation: Math.PI * 2,
+            duration: 1000,
+            repeat: -1,
+            ease: 'Linear'
+        });
+    }
+
+    hideLoadingIndicator() {
+        if (this.loadingIndicator) {
+            this.loadingIndicator.destroy();
+            this.loadingIndicator = null;
+        }
+    }
+
+    createConnectionStatus() {
+        const { WIDTH } = GAME_CONFIG.SCREEN;
+        
+        this.connectionStatusContainer = this.add.container(WIDTH - 20, 20);
+        
+        this.connectionStatusBg = this.add.rectangle(0, 0, 150, 30, 0x333333, 0.8)
+            .setStrokeStyle(1, 0x666666)
+            .setOrigin(1, 0);
+        
+        this.connectionStatusText = this.add.text(-10, 0, 'Connecting...', {
+            fontSize: '12px',
+            fill: '#ffffff'
+        }).setOrigin(1, 0.5);
+        
+        this.connectionStatusIndicator = this.add.circle(-130, 0, 5, 0xffaa00)
+            .setOrigin(0.5);
+        
+        this.connectionStatusContainer.add([
+            this.connectionStatusBg,
+            this.connectionStatusText,
+            this.connectionStatusIndicator
+        ]);
+    }
+
+    updateConnectionStatus(text, status) {
+        if (!this.connectionStatusText) return;
+        
+        this.connectionStatusText.setText(text);
+        
+        const colors = {
+            'connecting': 0xffaa00,
+            'connected': 0x00ff00,
+            'failed': 0xff0000,
+            'reconnecting': 0xff8800
+        };
+        
+        const color = colors[status] || 0x666666;
+        this.connectionStatusIndicator.setFillStyle(color);
+        
+        // Add pulsing effect for connecting states
+        if (status === 'connecting' || status === 'reconnecting') {
+            this.tweens.add({
+                targets: this.connectionStatusIndicator,
+                alpha: 0.3,
+                duration: 500,
+                yoyo: true,
+                repeat: -1
+            });
+        } else {
+            this.connectionStatusIndicator.setAlpha(1);
+            this.tweens.killTweensOf(this.connectionStatusIndicator);
+        }
+    }
+
+    showRetryOption() {
+        const { WIDTH, HEIGHT } = GAME_CONFIG.SCREEN;
+        
+        if (this.retryDialog) {
+            this.retryDialog.destroy();
+        }
+        
+        this.retryDialog = this.add.container(WIDTH/2, HEIGHT/2);
+        
+        const bg = this.add.rectangle(0, 0, 350, 150, 0x000000, 0.9)
+            .setStrokeStyle(2, 0xff8800);
+        
+        const title = this.add.text(0, -40, 'Connection Failed', {
+            fontSize: '18px',
+            fill: '#ff8800',
+            fontStyle: 'bold'
+        }).setOrigin(0.5);
+        
+        const message = this.add.text(0, -10, `Attempt ${this.connectionRetries}/${this.maxConnectionRetries}`, {
+            fontSize: '14px',
+            fill: '#ffffff'
+        }).setOrigin(0.5);
+        
+        const retryButton = this.add.rectangle(-60, 40, 100, 30, 0x27ae60)
+            .setInteractive()
+            .setStrokeStyle(2, 0x2ecc71);
+        
+        const retryText = this.add.text(-60, 40, 'Retry', {
+            fontSize: '14px',
+            fill: '#ffffff'
+        }).setOrigin(0.5);
+        
+        const cancelButton = this.add.rectangle(60, 40, 100, 30, 0xe74c3c)
+            .setInteractive()
+            .setStrokeStyle(2, 0xc0392b);
+        
+        const cancelText = this.add.text(60, 40, 'Cancel', {
+            fontSize: '14px',
+            fill: '#ffffff'
+        }).setOrigin(0.5);
+        
+        this.retryDialog.add([bg, title, message, retryButton, retryText, cancelButton, cancelText]);
+        
+        // Button interactions
+        retryButton.on('pointerdown', () => {
+            this.retryDialog.destroy();
+            this.retryDialog = null;
+            this.attemptLobbyConnection();
+        });
+        
+        retryButton.on('pointerover', () => {
+            retryButton.setFillStyle(0x2ecc71);
+        });
+        
+        retryButton.on('pointerout', () => {
+            retryButton.setFillStyle(0x27ae60);
+        });
+        
+        cancelButton.on('pointerdown', () => {
+            this.retryDialog.destroy();
+            this.retryDialog = null;
+            this.scene.start('MenuScene');
+        });
+        
+        cancelButton.on('pointerover', () => {
+            cancelButton.setFillStyle(0xc0392b);
+        });
+        
+        cancelButton.on('pointerout', () => {
+            cancelButton.setFillStyle(0xe74c3c);
         });
     }
 
@@ -137,7 +382,7 @@ class LobbyScene extends Phaser.Scene {
         // Availability indicator for ghost role
         let availabilityText = null;
         if (roleType === SHARED_CONFIG.ROLES.GHOST) {
-            availabilityText = this.add.text(x, y + 85, 'Slots: 2/2', {
+            availabilityText = this.add.text(x, y + 85, `Slots: 0/${this.maxGhosts}`, {
                 fontSize: '11px',
                 fill: '#ffaa00'
             }).setOrigin(0.5);
@@ -154,8 +399,10 @@ class LobbyScene extends Phaser.Scene {
         
         // Interactions
         card.on('pointerover', () => {
-            card.setFillStyle(config.hoverColor, 1);
-            this.showRolePreview(roleType);
+            if (this.connectionState === 'connected') {
+                card.setFillStyle(config.hoverColor, 1);
+                this.showRolePreview(roleType);
+            }
         });
         
         card.on('pointerout', () => {
@@ -163,7 +410,11 @@ class LobbyScene extends Phaser.Scene {
         });
         
         card.on('pointerdown', () => {
-            this.selectRole(roleType);
+            if (this.connectionState === 'connected') {
+                this.selectRole(roleType);
+            } else {
+                this.showConnectionRequiredMessage();
+            }
         });
         
         // Default selection
@@ -172,8 +423,24 @@ class LobbyScene extends Phaser.Scene {
         }
     }
 
+    showConnectionRequiredMessage() {
+        if (this.uiManager) {
+            this.uiManager.showMessage(
+                'Please wait for connection...', 
+                GAME_CONFIG.SCREEN.WIDTH/2, 
+                GAME_CONFIG.SCREEN.HEIGHT/2 - 50
+            );
+        }
+    }
+
     selectRole(roleType) {
         if (this.selectedRole === roleType) return;
+        
+        // Check connection
+        if (this.connectionState !== 'connected') {
+            this.showConnectionRequiredMessage();
+            return;
+        }
         
         // Check ghost slot availability
         if (roleType === SHARED_CONFIG.ROLES.GHOST) {
@@ -230,9 +497,11 @@ class LobbyScene extends Phaser.Scene {
         if (ghostCount >= this.maxGhosts && this.selectedRole !== SHARED_CONFIG.ROLES.GHOST) {
             ghostCard.card.setAlpha(0.5);
             ghostCard.card.setFillStyle(0x444444, 0.7);
+            ghostCard.card.disableInteractive();
         } else {
             ghostCard.card.setAlpha(1);
             ghostCard.card.setFillStyle(ghostCard.config.color, 0.9);
+            ghostCard.card.setInteractive();
         }
     }
 
@@ -253,10 +522,11 @@ class LobbyScene extends Phaser.Scene {
                          '• Coordinate with other defenders\n' +
                          '• Wake up to move and build';
         } else {
+            const abilities = SHARED_CONFIG.GHOST.ABILITIES;
             previewText = 'GHOST ABILITIES:\n\n' +
-                         '• Speed Burst - Move faster temporarily\n' +
-                         '• Phase Through - Pass through walls\n' +
-                         '• Summon Minion - Create helper ghost\n' +
+                         `• ${abilities.SPEED_BURST.name} - ${abilities.SPEED_BURST.description}\n` +
+                         `• ${abilities.PHASE_THROUGH.name} - ${abilities.PHASE_THROUGH.description}\n` +
+                         `• ${abilities.SUMMON_MINION.name} - ${abilities.SUMMON_MINION.description}\n` +
                          '• Hunt sleeping defenders for money\n' +
                          '• Break through defenses';
         }
@@ -286,14 +556,20 @@ class LobbyScene extends Phaser.Scene {
         
         // Ready button interactions
         this.readyButton.on('pointerdown', () => {
-            this.toggleReady();
+            if (this.connectionState === 'connected') {
+                this.toggleReady();
+            } else {
+                this.showConnectionRequiredMessage();
+            }
         });
         
         this.readyButton.on('pointerover', () => {
-            if (this.isReady) {
-                this.readyButton.setFillStyle(0xc0392b);
-            } else {
-                this.readyButton.setFillStyle(0x27ae60);
+            if (this.connectionState === 'connected') {
+                if (this.isReady) {
+                    this.readyButton.setFillStyle(0xc0392b);
+                } else {
+                    this.readyButton.setFillStyle(0x27ae60);
+                }
             }
         });
         
@@ -305,12 +581,22 @@ class LobbyScene extends Phaser.Scene {
     toggleReady() {
         this.isReady = !this.isReady;
         this.updateReadyButton();
-        this.networkManager.sendReadyStatus(this.isReady);
+        
+        if (this.networkManager && this.networkManager.isConnected()) {
+            this.networkManager.sendReadyStatus(this.isReady);
+        }
         
         console.log(`Ready status: ${this.isReady}`);
     }
 
     updateReadyButton() {
+        if (this.connectionState !== 'connected') {
+            this.readyButton.setFillStyle(0x95a5a6, 0.5);
+            this.readyButtonText.setText('DISCONNECTED');
+            this.readyButtonText.setFill('#888888');
+            return;
+        }
+
         if (this.isReady) {
             this.readyButton.setFillStyle(0x27ae60, 1);
             this.readyButtonText.setText('READY ✓');
@@ -336,7 +622,7 @@ class LobbyScene extends Phaser.Scene {
         });
         
         // Ghost slots indicator
-        this.ghostSlotsText = this.add.text(250, HEIGHT/2 + 80, 'Ghost Slots: 0/2', {
+        this.ghostSlotsText = this.add.text(250, HEIGHT/2 + 80, `Ghost Slots: 0/${this.maxGhosts}`, {
             fontSize: '14px',
             fill: '#8844ff'
         });
@@ -409,6 +695,9 @@ class LobbyScene extends Phaser.Scene {
 
         // Update start button
         this.updateStartButton();
+        
+        // Hide loading indicator once we receive lobby data
+        this.hideLoadingIndicator();
     }
 
     createStartButton() {
@@ -418,20 +707,22 @@ class LobbyScene extends Phaser.Scene {
             .setStrokeStyle(2, 0xffffff)
             .setInteractive();
             
-        this.startButtonText = this.add.text(WIDTH/2, HEIGHT - 80, 'WAITING FOR PLAYERS', {
+        this.startButtonText = this.add.text(WIDTH/2, HEIGHT - 80, 'WAITING FOR CONNECTION', {
             fontSize: '16px',
             fill: '#ffffff',
             fontStyle: 'bold'
         }).setOrigin(0.5);
         
         this.startButton.on('pointerdown', () => {
-            if (this.canStartGame()) {
+            if (this.connectionState === 'connected' && this.canStartGame()) {
                 this.networkManager.requestGameStart();
+            } else if (this.connectionState !== 'connected') {
+                this.showConnectionRequiredMessage();
             }
         });
         
         this.startButton.on('pointerover', () => {
-            if (this.canStartGame()) {
+            if (this.connectionState === 'connected' && this.canStartGame()) {
                 this.startButton.setFillStyle(0x2ecc71);
             }
         });
@@ -444,19 +735,33 @@ class LobbyScene extends Phaser.Scene {
     canStartGame() {
         if (!this.lobbyData.canStartGame) return false;
         if (!this.lobbyData.allPlayersReady) return false;
-        if (this.playerCount < 2) return false;
+        if (this.playerCount < (SHARED_CONFIG.LOBBY.MIN_PLAYERS || 2)) return false;
         return !this.gameStarted;
     }
 
     updateStartButton() {
-        if (!this.lobbyData) return;
+        if (!this.lobbyData) {
+            this.startButtonText.setText('WAITING FOR CONNECTION');
+            this.startButton.setFillStyle(0x95a5a6, 0.5);
+            this.startButton.setAlpha(0.7);
+            return;
+        }
+
+        if (this.connectionState !== 'connected') {
+            this.startButtonText.setText('DISCONNECTED');
+            this.startButton.setFillStyle(0xff0000, 0.5);
+            this.startButton.setAlpha(0.7);
+            return;
+        }
+
+        const minPlayers = SHARED_CONFIG.LOBBY.MIN_PLAYERS || 2;
 
         if (this.canStartGame()) {
             this.startButtonText.setText('START GAME');
             this.startButton.setFillStyle(0x27ae60, 1);
             this.startButton.setAlpha(1);
-        } else if (this.playerCount < 2) {
-            this.startButtonText.setText('NEED MORE PLAYERS (2+)');
+        } else if (this.playerCount < minPlayers) {
+            this.startButtonText.setText(`NEED MORE PLAYERS (${minPlayers}+)`);
             this.startButton.setFillStyle(0x95a5a6, 0.5);
             this.startButton.setAlpha(0.7);
         } else if (!this.lobbyData.allPlayersReady) {
@@ -498,28 +803,47 @@ class LobbyScene extends Phaser.Scene {
     }
 
     setupNetworkEvents() {
-        // Connection status
-        this.networkManager.socket.on('connect', () => {
+        if (!this.networkManager || !this.networkManager.socket) {
+            console.error('NetworkManager or socket not available');
+            return;
+        }
+
+        // Connection status events
+        this.networkManager.socket.on(SHARED_CONFIG.EVENTS.CONNECTION, () => {
             console.log('✅ Connected to lobby');
+            this.onConnectionEstablished();
         });
         
-        this.networkManager.socket.on('disconnect', () => {
-            console.log('❌ Disconnected from lobby');
-            this.showConnectionError();
+        this.networkManager.socket.on(SHARED_CONFIG.EVENTS.DISCONNECTION, (reason) => {
+            console.log('❌ Disconnected from lobby:', reason);
+            this.connectionState = 'disconnected';
+            this.updateConnectionStatus('Disconnected', 'failed');
+            this.updateReadyButton();
+            this.updateStartButton();
+            
+            if (reason !== 'io client disconnect') {
+                this.showConnectionError('Connection lost. Attempting to reconnect...');
+            }
         });
 
-        // Lobby updates
+        this.networkManager.socket.on(SHARED_CONFIG.EVENTS.CONNECTION_ERROR, (error) => {
+            console.error('Connection error:', error);
+            this.connectionState = 'failed';
+            this.updateConnectionStatus('Connection Error', 'failed');
+            this.onConnectionTimeout();
+        });
+
+        // Lobby events
         this.networkManager.socket.on(SHARED_CONFIG.EVENTS.LOBBY_UPDATE, (data) => {
             console.log('📊 Lobby update:', data);
             this.updatePlayerList(data);
         });
         
-        // Role selection confirmed
+        // Role selection events
         this.networkManager.socket.on(SHARED_CONFIG.EVENTS.ROLE_SELECTED, (data) => {
-            console.log(`Role selected: ${data.role}`);
+            console.log(`✅ Role selection confirmed: ${data.role}`);
         });
 
-        // Role selection failed
         this.networkManager.socket.on(SHARED_CONFIG.EVENTS.ROLE_SELECTION_FAILED, (data) => {
             console.log(`❌ Role selection failed: ${data.reason}`);
             this.uiManager.showMessage(
@@ -529,24 +853,33 @@ class LobbyScene extends Phaser.Scene {
             );
         });
 
-        // Ready status confirmed
+        // Ready status events
         this.networkManager.socket.on(SHARED_CONFIG.EVENTS.READY_STATUS_UPDATED, (data) => {
-            console.log(`Ready status updated: ${data.ready}`);
+            console.log(`✅ Ready status updated: ${data.ready}`);
         });
         
-        // Game starting
+        // Game start events
         this.networkManager.socket.on(SHARED_CONFIG.EVENTS.GAME_STARTING, (data) => {
             this.gameStarted = true;
-            this.startGameCountdown(data.countdown || 3);
+            this.startGameCountdown(data.countdown || SHARED_CONFIG.LOBBY.COUNTDOWN_DURATION || 3);
         });
         
-        // Game started
         this.networkManager.socket.on(SHARED_CONFIG.EVENTS.GAME_STARTED, (data) => {
             console.log('🎮 Game started! My role:', data.playerRole);
             this.scene.start('RoomSelectScene', { 
                 playerRole: data.playerRole,
                 gameData: data 
             });
+        });
+
+        // Error handling
+        this.networkManager.socket.on(SHARED_CONFIG.EVENTS.ERROR, (error) => {
+            console.error('Server error:', error);
+            this.uiManager.showMessage(
+                `Error: ${error.message || error}`,
+                GAME_CONFIG.SCREEN.WIDTH / 2,
+                100
+            );
         });
     }
 
@@ -564,61 +897,148 @@ class LobbyScene extends Phaser.Scene {
         }, 1000);
     }
 
-    showConnectionError() {
+    showConnectionError(message = 'Connection lost') {
         const { WIDTH, HEIGHT } = GAME_CONFIG.SCREEN;
         
-        if (this.errorMessage) return;
+        if (this.errorMessage) {
+            this.errorMessage.destroy();
+        }
         
         this.errorMessage = this.add.container(WIDTH/2, HEIGHT/2);
         
-        const bg = this.add.rectangle(0, 0, 400, 150, 0x000000, 0.9)
+        const bg = this.add.rectangle(0, 0, 400, 180, 0x000000, 0.9)
             .setStrokeStyle(2, 0xff0000);
             
-        const title = this.add.text(0, -30, 'Connection Lost', {
+        const title = this.add.text(0, -50, 'Connection Problem', {
             fontSize: '18px',
             fill: '#ff0000',
             fontStyle: 'bold'
         }).setOrigin(0.5);
         
-        const message = this.add.text(0, 10, 'Lost connection to server.\nPlease refresh the page.', {
+        const messageText = this.add.text(0, -10, message, {
             fontSize: '14px',
             fill: '#ffffff',
-            align: 'center'
+            align: 'center',
+            wordWrap: { width: 350 }
         }).setOrigin(0.5);
         
-        const retryButton = this.add.rectangle(0, 50, 120, 30, 0x27ae60)
+        const retryButton = this.add.rectangle(-80, 40, 120, 30, 0x27ae60)
             .setInteractive()
-            .on('pointerdown', () => {
-                location.reload();
-            });
+            .setStrokeStyle(2, 0x2ecc71);
             
-        const retryText = this.add.text(0, 50, 'Retry', {
+        const retryText = this.add.text(-80, 40, 'Retry', {
+            fontSize: '14px',
+            fill: '#ffffff'
+        }).setOrigin(0.5);
+
+        const menuButton = this.add.rectangle(80, 40, 120, 30, 0xe74c3c)
+            .setInteractive()
+            .setStrokeStyle(2, 0xc0392b);
+            
+        const menuText = this.add.text(80, 40, 'Main Menu', {
             fontSize: '14px',
             fill: '#ffffff'
         }).setOrigin(0.5);
         
-        this.errorMessage.add([bg, title, message, retryButton, retryText]);
+        this.errorMessage.add([bg, title, messageText, retryButton, retryText, menuButton, menuText]);
+        
+        // Button interactions
+        retryButton.on('pointerdown', () => {
+            this.errorMessage.destroy();
+            this.errorMessage = null;
+            this.connectionRetries = 0;
+            this.attemptLobbyConnection();
+        });
+        
+        retryButton.on('pointerover', () => {
+            retryButton.setFillStyle(0x2ecc71);
+        });
+        
+        retryButton.on('pointerout', () => {
+            retryButton.setFillStyle(0x27ae60);
+        });
+
+        menuButton.on('pointerdown', () => {
+            this.scene.start('MenuScene');
+        });
+        
+        menuButton.on('pointerover', () => {
+            menuButton.setFillStyle(0xc0392b);
+        });
+        
+        menuButton.on('pointerout', () => {
+            menuButton.setFillStyle(0xe74c3c);
+        });
+    }
+
+    showInitializationError(error) {
+        const { WIDTH, HEIGHT } = GAME_CONFIG.SCREEN;
+        
+        const errorContainer = this.add.container(WIDTH/2, HEIGHT/2);
+        
+        const bg = this.add.rectangle(0, 0, 400, 150, 0x000000, 0.9)
+            .setStrokeStyle(2, 0xff0000);
+            
+        const title = this.add.text(0, -30, 'Initialization Error', {
+            fontSize: '18px',
+            fill: '#ff0000',
+            fontStyle: 'bold'
+        }).setOrigin(0.5);
+        
+        const message = this.add.text(0, 10, `Failed to initialize: ${error.message}`, {
+            fontSize: '14px',
+            fill: '#ffffff',
+            align: 'center',
+            wordWrap: { width: 350 }
+        }).setOrigin(0.5);
+        
+        const menuButton = this.add.rectangle(0, 50, 120, 30, 0xe74c3c)
+            .setInteractive()
+            .on('pointerdown', () => {
+                this.scene.start('MenuScene');
+            });
+            
+        const menuText = this.add.text(0, 50, 'Main Menu', {
+            fontSize: '14px',
+            fill: '#ffffff'
+        }).setOrigin(0.5);
+        
+        errorContainer.add([bg, title, message, menuButton, menuText]);
     }
 
     // Clean up when scene is destroyed
     destroy() {
         console.log('🗑️ Destroying LobbyScene');
         
+        // Destroy network manager
         if (this.networkManager) {
             this.networkManager.destroy();
         }
+        
+        // Clean up UI elements
         if (this.rolePreview) {
             this.rolePreview.destroy();
         }
         if (this.errorMessage) {
             this.errorMessage.destroy();
         }
+        if (this.retryDialog) {
+            this.retryDialog.destroy();
+        }
+        if (this.loadingIndicator) {
+            this.loadingIndicator.destroy();
+        }
         
         // Clear player list
-        this.playerList.forEach(item => {
-            if (item && item.destroy) item.destroy();
-        });
-        this.playerList = [];
+        if (this.playerList) {
+            this.playerList.forEach(item => {
+                if (item && item.destroy) item.destroy();
+            });
+            this.playerList = [];
+        }
+        
+        // Stop any running tweens
+        this.tweens.killAll();
     }
 }
 
