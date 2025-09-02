@@ -60,9 +60,31 @@ class LobbyManager {
 
         const oldRole = player.selectedRole;
         player.selectedRole = role;
-        player.ready = true; // Player is ready once they select a role
+        // Don't auto-set ready when selecting role
         
         console.log(`✅ Player ${socketId} selected role: ${oldRole} -> ${role}`);
+        return true;
+    }
+
+    // Toggle player ready status
+    togglePlayerReady(socketId, readyState) {
+        const player = this.players.get(socketId);
+        if (!player) return false;
+
+        player.ready = readyState;
+        console.log(`✅ Player ${socketId} ready status: ${readyState}`);
+        return true;
+    }
+
+    // Check if all players are ready
+    allPlayersReady() {
+        if (this.players.size === 0) return false;
+        
+        for (const player of this.players.values()) {
+            if (!player.ready) {
+                return false;
+            }
+        }
         return true;
     }
 
@@ -77,7 +99,9 @@ class LobbyManager {
             ghostCount: ghostCount,
             maxGhosts: this.maxGhosts,
             canStartGame: this.canStartGame(),
-            gameStarted: this.gameStarted
+            allPlayersReady: this.allPlayersReady(),
+            gameStarted: this.gameStarted,
+            readyCount: playersArray.filter(p => p.ready).length
         };
     }
 
@@ -118,13 +142,6 @@ class LobbyManager {
 
         if (ghostCount === 0 || defenderCount === 0) {
             return false;
-        }
-
-        // All players should have selected a role (be ready)
-        for (const player of this.players.values()) {
-            if (!player.ready) {
-                return false;
-            }
         }
 
         return true;
