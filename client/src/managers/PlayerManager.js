@@ -384,9 +384,13 @@ class PlayerManager {
         }
 
         // Send movement to server if moved
-        if (moved && this.scene.networkManager) {
-            this.scene.networkManager.sendPlayerMove(me.x, me.y);
-        }
+        // Send position to server
+if (moved && this.scene.networkManager) {
+    this.scene.networkManager.sendPlayerMove(
+        this.mainPlayer.x,
+        this.mainPlayer.y
+    );
+}
     }
 
     // Force reset player physics (useful for debugging)

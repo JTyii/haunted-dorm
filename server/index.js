@@ -267,13 +267,17 @@ io.on('connection', (socket) => {
 
     // Movement sync
     socket.on(SHARED_CONFIG.EVENTS.PLAYER_MOVE, ({ x, y }) => {
+        players[socket.id].x = x;
+    players[socket.id].y = y;
         // Don't process movement if player is a ghost
         if (ghostLogic.isPlayerGhost(socket.id)) return;
         
         if (playerManager.updatePlayerPosition(socket.id, x, y)) {
-            socket.broadcast.emit(SHARED_CONFIG.EVENTS.PLAYER_MOVE, { 
-                playerId: socket.id, x, y 
-            });
+            io.emit(SHARED_CONFIG.EVENTS.PLAYER_MOVED, {
+        playerId: socket.id,
+        x,
+        y
+    });
         }
     });
 

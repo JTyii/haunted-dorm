@@ -248,6 +248,15 @@ class NetworkManager {
         // Ghost events
         this.setupGhostEvents();
 
+        // Player movement updates
+        this.socket.on(SHARED_CONFIG.EVENTS.PLAYER_MOVED, (data) => {
+            const { playerId, x, y } = data;
+            // Don't apply to yourself, only update other players
+            if (playerId !== this.getSocketId() && this.scene?.playerManager) {
+                this.scene.playerManager.updatePlayerPosition(playerId, x, y);
+            }
+        });
+
         // Error handling
         this.socket.on(SHARED_CONFIG.EVENTS.ERROR, (error) => {
             console.error('Server error:', error);

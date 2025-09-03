@@ -1,19 +1,16 @@
-// client/scenes/RoomSelectScene.js
+// client/scenes/RoomSelectScene.js - Enhanced with proper network handling
 class RoomSelectScene extends Phaser.Scene {
     constructor() {
         super('RoomSelectScene');
     }
 
     init(data) {
-        // Store initialization data
         this.playerRole = data?.playerRole || 'defender';
         this.gameData = data?.gameData || {};
-        
         console.log('🏠 RoomSelectScene initialized with role:', this.playerRole);
     }
 
     preload() {
-        // Assets should already be loaded by BootScene
         console.log('📦 RoomSelectScene preload');
     }
 
@@ -27,28 +24,25 @@ class RoomSelectScene extends Phaser.Scene {
         this.playerManager = new PlayerManager(this);
         this.buildMenu = new BuildMenu(this);
 
-        // Initialize ghost manager if available
-        if (typeof GhostManager !== 'undefined') {
-            this.ghostManager = new GhostManager(this);
-            this.ghostManager.createGhostSelectionUI();
-        }
-
-        // Initialize game state
+        // Initialize game state tracking
         this.roomsCreated = false;
         this.playersCreated = false;
+        this.lastGameStateUpdate = 0;
 
         // Create UI
         this.uiManager.createMoneyDisplay(this.playerManager.getMoney());
-
-        // Setup input controls
         this.setupControls();
+        this.setupNetworkEventHandlers();
 
-        // Setup network events
-        this.setupNetworkEvents();
+        // Create background and UI elements
+        this.createBackground();
+        this.createUI();
 
         // Join the game
         this.networkManager.joinGame();
+    }
 
+    createBackground() {
         // Create background
         this.add.rectangle(
             GAME_CONFIG.SCREEN.WIDTH / 2, 
@@ -57,7 +51,9 @@ class RoomSelectScene extends Phaser.Scene {
             GAME_CONFIG.SCREEN.HEIGHT, 
             0x0f1419
         );
+    }
 
+    createUI() {
         // Add title
         this.add.text(20, 20, '🏠 Dorm Selection', {
             fontSize: '24px',
@@ -84,12 +80,21 @@ class RoomSelectScene extends Phaser.Scene {
             wordWrap: { width: 400 }
         }).setScrollFactor(0);
 
-        this.debugText = this.add.text(10, 120, 'Debug: Press P for player state, R to reset main player', {
-        fontSize: '12px',
-        fill: '#ffffff',
-        backgroundColor: 'rgba(0,0,0,0.5)',
-        padding: { x: 5, y: 5 }
-    }).setScrollFactor(0).setDepth(1000);
+        // Network status indicator
+        this.networkStatusText = this.add.text(20, GAME_CONFIG.SCREEN.HEIGHT - 60, 'Connecting...', {
+            fontSize: '12px',
+            fill: '#ffff00',
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            padding: { x: 5, y: 5 }
+        }).setScrollFactor(0).setDepth(1000);
+
+        // Debug text
+        this.debugText = this.add.text(10, 120, 'Debug: Press P for player state, F to fix main player', {
+            fontSize: '12px',
+            fill: '#ffffff',
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            padding: { x: 5, y: 5 }
+        }).setScrollFactor(0).setDepth(1000);
     }
 
     setupControls() {
@@ -110,187 +115,178 @@ class RoomSelectScene extends Phaser.Scene {
         });
     }
 
-    setupNetworkEvents() {
-        // Game state updates
-        this.networkManager.socket.on(SHARED_CONFIG.EVENTS.GAME_STATE, (state) => {
-            this.handleGameState(state);
-        });
+    setupNetworkEventHandlers() {
+        // Set network event handlers on the scene for the NetworkManager to call
+        this.handleGameState = (gameState) => {
+            this.processGameState(gameState);
+        };
 
-        // Player events
-        this.networkManager.socket.on(SHARED_CONFIG.EVENTS.PLAYER_JOINED, (playerData) => {
-            console.log('👤 Player joined game:', playerData.id);
-        });
+        this.handlePlayerJoined = (data) => {
+            console.log('👤 Player joined game:', data.id);
+            // Player creation will be handled by next game state update
+        };
 
-        this.networkManager.socket.on(SHARED_CONFIG.EVENTS.PLAYER_LEFT, (playerId) => {
-            console.log('👋 Player left game:', playerId);
+        this.handlePlayerLeft = (data) => {
+            console.log('👋 Player left:', data.playerId);
+            
             // Remove player sprite if it exists
-            const player = this.playerManager.getPlayer(playerId);
+            const player = this.playerManager.getPlayer(data.playerId);
             if (player) {
                 player.destroy();
-                delete this.playerManager.players[playerId];
+                delete this.playerManager.players[data.playerId];
             }
-        });
+        };
 
-        // Room/bed events
-        this.networkManager.socket.on(SHARED_CONFIG.EVENTS.BED_OCCUPIED, (data) => {
-            console.log('🛏️ Bed occupied:', data);
+        this.handleBedOccupied = (data) => {
+            console.log('🛏️ Bed occupied by server:', data);
             this.playerManager.snapPlayerToBed(data.playerId, data.bedX, data.bedY, data.roomId);
-        });
+        };
 
-        this.networkManager.socket.on(SHARED_CONFIG.EVENTS.PLAYER_WOKE_UP, (data) => {
-            console.log('☀️ Player woke up:', data);
+        this.handlePlayerWakeUp = (data) => {
+            console.log('☀️ Player woke up by server:', data);
             this.playerManager.wakePlayer(data.playerId);
-        });
+        };
 
-        // Building events
-        this.networkManager.socket.on(SHARED_CONFIG.EVENTS.TOWER_PLACED, (data) => {
+        this.handleTowerPlaced = (data) => {
             console.log('🔫 Tower placed by server:', data);
-            // Visual feedback handled by buildMenu
-        });
+            
+            // Visual feedback - place tower sprite
+            if (this.roomManager) {
+                const room = this.roomManager.getRoomRects()[data.tower.roomId];
+                if (room) {
+                    this.roomManager.placeTurretVisual(
+                        data.tower.roomId, 
+                        data.tower.col, 
+                        data.tower.row, 
+                        data.tower.x, 
+                        data.tower.y
+                    );
+                }
+            }
+        };
 
-        this.networkManager.socket.on(SHARED_CONFIG.EVENTS.BUILD_FAILED, (data) => {
-            console.log('❌ Build failed:', data.reason);
+        this.handleBuildFailed = (data) => {
+            console.log('❌ Build failed by server:', data.reason);
             this.uiManager.showMessage(
                 `Build failed: ${data.reason}`, 
                 GAME_CONFIG.SCREEN.WIDTH / 2, 
                 GAME_CONFIG.SCREEN.HEIGHT / 2
             );
-        });
+        };
+
+        this.handlePlayerMoneyUpdate = (data) => {
+            // Handle money updates from server
+            this.playerManager.handleMoneyUpdate(data);
+        };
     }
 
-    handleGameState(state) {
-        console.log('📦 Received game state:', state);
-
+    processGameState(gameState) {
+        console.log('📦 Processing game state update');
+        
+        // Update network status
+        this.updateNetworkStatus();
+        
         // Validate state
-        if (!state || !state.rooms || !state.players) {
-            console.error('Invalid game state received:', state);
+        if (!gameState || !gameState.rooms || !gameState.players) {
+            console.error('Invalid game state received:', gameState);
             return;
         }
 
         try {
-            // Create/update rooms
-            this.handleRooms(state);
+            // Create/update rooms (only once, as they're deterministic from server)
+            if (!this.roomsCreated) {
+                this.handleRooms(gameState);
+            }
             
             // Create/update players
-            this.handlePlayers(state);
+            this.handlePlayers(gameState);
             
-            // Update ghost manager if available
-            if (this.ghostManager && state.ghosts) {
-                this.ghostManager.updateGhosts(state.ghosts);
-                this.ghostManager.updateGhostSelectionButton(state);
-            }
+            // Update room occupancy
+            this.updateRoomOccupancy(gameState);
+            
+            this.lastGameStateUpdate = Date.now();
             
         } catch (error) {
-            console.error('Error handling game state:', error);
+            console.error('Error processing game state:', error);
         }
     }
 
-    handleRooms(state) {
-        // Create rooms first time
-        if (!this.roomsCreated) {
-            state.rooms.forEach((room, index) => {
-                console.log(`🏠 Creating room ${room.id}`, room);
-                this.roomManager.createRoom(room, index, state.rooms.length);
-            });
-            this.roomsCreated = true;
-        }
-
-        // Update bed occupancy for all rooms
-        state.rooms.forEach(room => {
-            this.roomManager.updateBedOccupancy(room, state);
-        });
-    }
-
-    handlePlayers(state) {
-    console.log('🔍 DEBUG: Handling players...', {
-        currentSocketId: this.networkManager.getSocketId(),
-        playersInState: Object.keys(state.players),
-        existingPlayers: Object.keys(this.playerManager.players)
-    });
-
-    // Create/update players
-    Object.values(state.players).forEach((playerData, index) => {
-        console.log('🔍 Processing player:', {
-            playerId: playerData.id,
-            index: index,
-            position: { x: playerData.x, y: playerData.y },
-            isMainPlayerBySocketId: playerData.id === this.networkManager.getSocketId()
-        });
-
-        const existingPlayer = this.playerManager.getPlayer(playerData.id);
+    handleRooms(gameState) {
+        console.log('🏠 Creating rooms from server data');
         
-        if (!existingPlayer) {
-            // Create new player
-            console.log(`👤 Creating player ${playerData.id}`, playerData);
-            const player = this.playerManager.createPlayer(playerData);
-        } else {
-            // Update existing player
-            this.updateExistingPlayer(playerData, state);
-        }
-    });
-
-    // FORCE SET MAIN PLAYER if we don't have one
-    if (!this.playerManager.mainPlayer) {
-        const playerIds = Object.keys(this.playerManager.players);
-        if (playerIds.length > 0) {
-            const firstPlayerId = playerIds[0];
-            console.log('🎮 FORCING main player to be:', firstPlayerId);
-            
-            // Directly set main player
-            this.playerManager.mainPlayer = this.playerManager.players[firstPlayerId];
-            this.playerManager.mainPlayerId = firstPlayerId;
-            
-            // Setup main player
-            if (this.playerManager.mainPlayer) {
-                this.playerManager.setupMainPlayer();
-                this.setupMainPlayerPhysics();
-                
-                this.time.delayedCall(100, () => {
-                    this.playerManager.enableMovement();
-                    console.log('✅ Main player movement enabled for:', firstPlayerId);
-                });
-            }
-        }
+        gameState.rooms.forEach((room, index) => {
+            console.log(`🏠 Creating room ${room.id} with server data:`, room);
+            this.roomManager.createRoom(room, index, gameState.rooms.length);
+        });
+        
+        this.roomsCreated = true;
+        console.log('✅ All rooms created');
+        
+        // Setup physics after a short delay
+        this.time.delayedCall(200, () => {
+            this.setupMainPlayerPhysics();
+        });
     }
 
-    // Remove players that left
-    Object.keys(this.playerManager.players).forEach(playerId => {
-        if (!state.players[playerId]) {
-            console.log(`👋 Removing player ${playerId}`);
-            const player = this.playerManager.getPlayer(playerId);
-            if (player) {
-                player.destroy();
-                delete this.playerManager.players[playerId];
+    handlePlayers(gameState) {
+        const mySocketId = this.networkManager.getSocketId();
+        
+        console.log('🔍 Handling players update:', {
+            mySocketId: mySocketId,
+            playersInState: Object.keys(gameState.players),
+            existingPlayers: Object.keys(this.playerManager.players)
+        });
+
+        // Create/update players
+        Object.values(gameState.players).forEach((playerData) => {
+            const existingPlayer = this.playerManager.getPlayer(playerData.id);
+            
+            if (!existingPlayer) {
+                // Create new player
+                console.log(`👤 Creating new player ${playerData.id}`);
+                this.playerManager.createPlayer(playerData);
+            } else {
+                // Update existing player (position, state, etc.)
+                this.updateExistingPlayer(playerData, gameState);
             }
-        }
-    });
+        });
 
-    // Debug: Check final state
-    console.log('🔍 Final player state after handlePlayers:', {
-        mainPlayer: this.playerManager.mainPlayer ? 'exists' : 'null',
-        mainPlayerId: this.playerManager.mainPlayerId,
-        totalPlayers: Object.keys(this.playerManager.players).length,
-        playerIds: Object.keys(this.playerManager.players)
-    });
+        // Remove players that left
+        Object.keys(this.playerManager.players).forEach(playerId => {
+            if (!gameState.players[playerId]) {
+                console.log(`👋 Removing disconnected player ${playerId}`);
+                const player = this.playerManager.getPlayer(playerId);
+                if (player) {
+                    player.destroy();
+                    delete this.playerManager.players[playerId];
+                }
+            }
+        });
 
-    this.playersCreated = true;
-}
+        // Ensure we have a main player
+        this.ensureMainPlayer(mySocketId);
+        
+        this.playersCreated = true;
+    }
 
-    updateExistingPlayer(playerData, state) {
+    updateExistingPlayer(playerData, gameState) {
         const isMainPlayer = playerData.id === this.networkManager.getSocketId();
         
         // Handle sleeping state
         if (playerData.isSleeping && playerData.bed) {
-            const room = state.rooms.find(r => r.id === playerData.bed.roomId);
+            const room = gameState.rooms.find(r => r.id === playerData.bed.roomId);
             if (room) {
-                const bedSprites = this.roomManager.getRoomBeds()[playerData.bed.roomId];
-                const bed = bedSprites?.[playerData.bed.bedIndex];
-                if (bed) {
-                    this.playerManager.makePlayerSleep(playerData.id, bed.x, bed.y);
+                // Find the bed position from room data
+                const bedData = room.occupiedBeds.find(b => b.playerId === playerData.id);
+                if (bedData !== undefined) {
+                    // Calculate bed position based on room layout
+                    const bedX = room.x - (room.width / 2) + (bedData.index * 60) + 30;
+                    const bedY = room.y + (room.height / 2) - 30;
+                    this.playerManager.makePlayerSleep(playerData.id, bedX, bedY);
                 }
             }
         } else {
-            // Update position for non-main players
+            // Update position for non-main players only
             if (!isMainPlayer) {
                 this.playerManager.updatePlayerPosition(playerData.id, playerData.x, playerData.y);
             }
@@ -299,93 +295,194 @@ class RoomSelectScene extends Phaser.Scene {
         }
     }
 
+    updateRoomOccupancy(gameState) {
+        // Update bed occupancy visual indicators
+        gameState.rooms.forEach(room => {
+            if (this.roomManager) {
+                this.roomManager.updateBedOccupancy(room, gameState);
+            }
+        });
+    }
+
+    ensureMainPlayer(mySocketId) {
+        if (!this.playerManager.mainPlayer && mySocketId) {
+            const myPlayer = this.playerManager.getPlayer(mySocketId);
+            if (myPlayer) {
+                console.log('🎮 Setting up main player:', mySocketId);
+                this.playerManager.mainPlayer = myPlayer;
+                this.playerManager.mainPlayerId = mySocketId;
+                this.playerManager.setupMainPlayer();
+                
+                // Setup physics with delay
+                this.time.delayedCall(100, () => {
+                    this.setupMainPlayerPhysics();
+                });
+            }
+        }
+    }
+
     setupMainPlayerPhysics() {
+        if (!this.playerManager.mainPlayer) {
+            console.log('❌ Cannot setup physics - no main player');
+            return;
+        }
+
         console.log('🔧 Setting up main player physics...');
         
-        // Setup wall collisions with delay to ensure rooms are created
-        this.time.delayedCall(150, () => {
+        // Setup wall collisions
+        this.time.delayedCall(50, () => {
             if (this.roomManager) {
                 this.roomManager.setupWallCollisions();
             }
         });
 
-        // Setup bed overlaps with delay
-        this.time.delayedCall(200, () => {
+        // Setup bed overlaps
+        this.time.delayedCall(100, () => {
             if (this.roomManager) {
                 this.roomManager.setupBedOverlaps();
             }
         });
 
-        // Enable input handling
-        this.time.delayedCall(250, () => {
+        // Enable movement
+        this.time.delayedCall(150, () => {
             if (this.playerManager && this.playerManager.mainPlayer) {
                 this.playerManager.resetMainPlayerPhysics();
+                this.playerManager.enableMovement();
                 console.log('✅ Main player physics setup complete');
             }
         });
     }
 
-    update() {
-    try {
-        // Debug hotkeys
-        if (this.input.keyboard.addKey('P').isDown) {
-            this.playerManager.debugPlayerState();
-        }
+    updateNetworkStatus() {
+        if (!this.networkStatusText) return;
         
-        // MANUAL FIX - press F key to force set main player
-        if (this.input.keyboard.addKey('F').isDown) {
-            const playerIds = Object.keys(this.playerManager.players);
-            if (playerIds.length > 0) {
-                const firstPlayerId = playerIds[0];
-                console.log('🔧 MANUAL: Forcing main player to be:', firstPlayerId);
-                
-                this.playerManager.mainPlayer = this.playerManager.players[firstPlayerId];
-                this.playerManager.mainPlayerId = firstPlayerId;
-                this.playerManager.setupMainPlayer();
-                this.playerManager.enableMovement();
-                
-                console.log('✅ Manual main player setup complete');
-            }
-        }
-
-        // Handle player movement input
-        if (this.playerManager) {
-            this.playerManager.handleMovementInput();
-            
-            // Interpolate other player movements
-            this.playerManager.interpolatePlayerMovement();
-        }
+        const connectionInfo = this.networkManager.getConnectionInfo();
+        const latency = this.networkManager.getLatency();
         
-        // Handle ghost movement if controlling a ghost
-        if (this.ghostManager && this.ghostManager.isControllingGhost()) {
-            this.ghostManager.handleGhostMovementInput();
+        if (connectionInfo.connected) {
+            const statusColor = latency < 100 ? '#00ff00' : latency < 200 ? '#ffff00' : '#ff0000';
+            this.networkStatusText.setText(`🌐 Connected | Ping: ${latency}ms | Players: ${Object.keys(this.playerManager.players).length}`);
+            this.networkStatusText.setStyle({ fill: statusColor });
+        } else {
+            this.networkStatusText.setText('❌ Disconnected');
+            this.networkStatusText.setStyle({ fill: '#ff0000' });
         }
-        
-    } catch (error) {
-        console.error('Error in update loop:', error);
     }
-}
 
-    // Clean up when scene is destroyed
+    update() {
+        try {
+            // Debug hotkeys
+            if (this.input.keyboard.addKey('P').isDown) {
+                this.playerManager.debugPlayerState();
+            }
+            
+            // Manual fix - F key to force set main player
+            if (this.input.keyboard.addKey('F').isDown) {
+                const mySocketId = this.networkManager.getSocketId();
+                if (mySocketId && this.playerManager.players[mySocketId]) {
+                    console.log('🔧 MANUAL: Forcing main player setup');
+                    this.playerManager.mainPlayer = this.playerManager.players[mySocketId];
+                    this.playerManager.mainPlayerId = mySocketId;
+                    this.playerManager.setupMainPlayer();
+                    this.setupMainPlayerPhysics();
+                }
+            }
+
+            // Handle movement input for main player
+            if (this.playerManager && this.playerManager.mainPlayer) {
+                this.playerManager.handleMovementInput();
+            }
+            
+            // Interpolate other players' movements
+            if (this.playerManager) {
+                this.playerManager.interpolatePlayerMovement();
+            }
+            
+            // Update network status periodically
+            if (Date.now() - this.lastGameStateUpdate > 2000) {
+                this.updateNetworkStatus();
+            }
+            
+        } catch (error) {
+            console.error('Error in update loop:', error);
+        }
+    }
+
+    // Scene lifecycle methods
+    shutdown() {
+        console.log('🔄 RoomSelectScene shutting down');
+        
+        // Clean up any scene-specific resources
+        if (this.networkStatusText) {
+            this.networkStatusText.destroy();
+        }
+        
+        if (this.debugText) {
+            this.debugText.destroy();
+        }
+    }
+
     destroy() {
         console.log('🗑️ Destroying RoomSelectScene');
         
         try {
-            if (this.networkManager) this.networkManager.destroy();
-            if (this.uiManager) this.uiManager.destroy();
+            // Clean up managers in reverse order
+            if (this.buildMenu) this.buildMenu.destroy();
             if (this.roomManager) this.roomManager.destroy();
             if (this.playerManager) this.playerManager.destroy();
-            if (this.buildMenu) this.buildMenu.destroy();
-            if (this.ghostManager) this.ghostManager.destroy();
+            if (this.uiManager) this.uiManager.destroy();
+            if (this.networkManager) this.networkManager.destroy();
+            
+            // Clear scene references
+            this.handleGameState = null;
+            this.handlePlayerJoined = null;
+            this.handlePlayerLeft = null;
+            this.handleBedOccupied = null;
+            this.handlePlayerWakeUp = null;
+            this.handleTowerPlaced = null;
+            this.handleBuildFailed = null;
+            this.handlePlayerMoneyUpdate = null;
+            
         } catch (error) {
             console.error('Error destroying scene:', error);
         }
     }
 
+    // Debug methods
     enableDebugMode() {
-    window.DEBUG_MODE = true;
-    console.log('🔍 Debug mode enabled - press P key to check player state');
-}
+        window.DEBUG_MODE = true;
+        console.log('🔍 Debug mode enabled');
+        
+        // Add debug display
+        if (!this.debugDisplay) {
+            this.debugDisplay = this.add.text(GAME_CONFIG.SCREEN.WIDTH - 200, 20, '', {
+                fontSize: '12px',
+                fill: '#ffffff',
+                backgroundColor: 'rgba(0,0,0,0.7)',
+                padding: { x: 5, y: 5 }
+            }).setScrollFactor(0).setDepth(1001);
+        }
+    }
+
+    updateDebugDisplay() {
+        if (this.debugDisplay && window.DEBUG_MODE) {
+            const connectionInfo = this.networkManager.getConnectionInfo();
+            const playerCount = Object.keys(this.playerManager.players).length;
+            const mainPlayerPos = this.playerManager.mainPlayer ? 
+                `${Math.round(this.playerManager.mainPlayer.x)}, ${Math.round(this.playerManager.mainPlayer.y)}` : 
+                'No player';
+            
+            this.debugDisplay.setText([
+                'DEBUG INFO',
+                `Connected: ${connectionInfo.connected}`,
+                `Latency: ${this.networkManager.getLatency()}ms`,
+                `Players: ${playerCount}`,
+                `Main Player: ${mainPlayerPos}`,
+                `Rooms: ${this.roomsCreated ? 'Created' : 'Pending'}`,
+                `Socket: ${connectionInfo.socketId?.substr(0, 8)}...`
+            ].join('\n'));
+        }
+    }
 }
 
 window.RoomSelectScene = RoomSelectScene;
