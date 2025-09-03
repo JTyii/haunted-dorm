@@ -1,6 +1,6 @@
 // server/managers/GameManager.js - Enhanced with broadcasting
 const config = require('../config/serverConfig');
-const PlayerManager = require('./PlayerManager');
+const PlayerManager = require('../../client/src/managers/PlayerManager');
 const { generateRooms } = require('../game/rooms');
 
 class GameManager {
@@ -176,38 +176,70 @@ class GameManager {
 
     // Handle player movement with broadcasting
     handlePlayerMove(playerId, data) {
-        const player = this.gameState.players[playerId];
-        if (!player || player.isSleeping) return;
-        
-        // Validate movement (basic bounds checking)
-        const { x, y } = data;
-        if (typeof x !== 'number' || typeof y !== 'number') return;
-        if (x < 0 || x > 2000 || y < 0 || y > 1000) return;
-        
-        // Update player position
+    const player = this.gameState.players[playerId];
+    if (!player || player.isSleeping) return;
+    
+    // Enhanced validation
+    const { x, y } = data;
+    if (typeof x !== 'number' || typeof y !== 'number') {
+        console.warn(`⚠️ Invalid movement data from ${playerId}:`, data);
+        return;
+    }
+    
+    if (!isFinite(x) || !isFinite(y)) {
+        console.warn(`⚠️ Non-finite movement data from ${playerId}:`, data);
+        return;
+    }
+    
+    // Bounds checking
+    if (x < -100 || x > 2100 || y < -100 || y > 1100) {
+        console.warn(`⚠️ Out of bounds movement from ${playerId}: (${x}, ${y})`);
+        return;
+    }
+    
+    // Calculate movement delta for validation (prevent teleporting)
+    const dx = Math.abs(x - player.x);
+    const dy = Math.abs(y - player.y);
+    const maxDelta = 100; // Maximum pixels per update
+    
+    if (dx > maxDelta || dy > maxDelta) {
+        console.warn(`⚠️ Large movement delta from ${playerId}: (${dx}, ${dy})`);
+        // Allow but clamp the movement
+        player.x = Math.max(-50, Math.min(2050, x));
+        player.y = Math.max(-50, Math.min(1050, y));
+    } else {
+        // Normal movement
         player.x = x;
         player.y = y;
-        player.lastMoveTime = Date.now();
-        
-        // Broadcast movement to all OTHER players (not the sender)
-        this.io.to(playerId).emit('playerMoved', {
-            playerId: playerId,
-            x: x,
-            y: y,
-            timestamp: Date.now()
-        });
-        
-        // Optional: Rate limit movement updates
-        if (!player.lastBroadcast || Date.now() - player.lastBroadcast > 50) { // 20fps max
-            this.io.emit('playerMoved', {
-                playerId: playerId,
-                x: x,
-                y: y,
-                timestamp: Date.now()
-            });
-            player.lastBroadcast = Date.now();
-        }
     }
+    
+    player.lastMoveTime = Date.now();
+    
+    // Broadcast to OTHER players only (not the sender)
+    // This prevents the moving player from getting their own movement back
+    this.io.to(playerId).emit('playerMoved', {
+        playerId: playerId,
+        x: player.x,
+        y: player.y,
+        timestamp: Date.now()
+    });
+    
+    // Optional: Rate-limited broadcast to all players for synchronization
+    if (!player.lastBroadcast || Date.now() - player.lastBroadcast > 100) { // 10fps max
+        // Broadcast to all players except sender
+        Object.keys(this.gameState.players).forEach(otherPlayerId => {
+            if (otherPlayerId !== playerId) {
+                this.io.to(otherPlayerId).emit('playerMoved', {
+                    playerId: playerId,
+                    x: player.x,
+                    y: player.y,
+                    timestamp: Date.now()
+                });
+            }
+        });
+        player.lastBroadcast = Date.now();
+    }
+}
 
     // Handle room entry (bed occupation)
     handleEnterRoom(playerId, data) {

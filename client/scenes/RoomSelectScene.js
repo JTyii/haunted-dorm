@@ -181,35 +181,40 @@ class RoomSelectScene extends Phaser.Scene {
     }
 
     processGameState(gameState) {
-        console.log('📦 Processing game state update');
-        
-        // Update network status
-        this.updateNetworkStatus();
-        
-        // Validate state
-        if (!gameState || !gameState.rooms || !gameState.players) {
-            console.error('Invalid game state received:', gameState);
-            return;
-        }
-
-        try {
-            // Create/update rooms (only once, as they're deterministic from server)
-            if (!this.roomsCreated) {
-                this.handleRooms(gameState);
-            }
-            
-            // Create/update players
-            this.handlePlayers(gameState);
-            
-            // Update room occupancy
-            this.updateRoomOccupancy(gameState);
-            
-            this.lastGameStateUpdate = Date.now();
-            
-        } catch (error) {
-            console.error('Error processing game state:', error);
-        }
+    console.log('📦 Processing game state update');
+    
+    // Update network status
+    this.updateNetworkStatus();
+    
+    // Validate state
+    if (!gameState || !gameState.rooms || !gameState.players) {
+        console.error('Invalid game state received:', gameState);
+        return;
     }
+
+    try {
+        // Ensure socket ID is current
+        if (this.playerManager) {
+            this.playerManager.updateSocketId();
+        }
+        
+        // Create/update rooms (only once)
+        if (!this.roomsCreated) {
+            this.handleRooms(gameState);
+        }
+        
+        // Handle players with better synchronization
+        this.handlePlayers(gameState);
+        
+        // Update room occupancy
+        this.updateRoomOccupancy(gameState);
+        
+        this.lastGameStateUpdate = Date.now();
+        
+    } catch (error) {
+        console.error('Error processing game state:', error);
+    }
+}
 
     handleRooms(gameState) {
         console.log('🏠 Creating rooms from server data');
@@ -229,45 +234,49 @@ class RoomSelectScene extends Phaser.Scene {
     }
 
     handlePlayers(gameState) {
-        const mySocketId = this.networkManager.getSocketId();
-        
-        console.log('🔍 Handling players update:', {
-            mySocketId: mySocketId,
-            playersInState: Object.keys(gameState.players),
-            existingPlayers: Object.keys(this.playerManager.players)
-        });
+    const mySocketId = this.networkManager.getSocketId();
+    
+    console.log('🔍 Handling players (improved):', {
+        mySocketId: mySocketId,
+        playersInState: Object.keys(gameState.players),
+        existingPlayers: Object.keys(this.playerManager.players)
+    });
 
-        // Create/update players
-        Object.values(gameState.players).forEach((playerData) => {
-            const existingPlayer = this.playerManager.getPlayer(playerData.id);
+    // Process each player in the game state
+    Object.values(gameState.players).forEach((playerData) => {
+        const existingPlayer = this.playerManager.getPlayer(playerData.id);
+        
+        if (!existingPlayer) {
+            // Create new player
+            console.log(`👤 Creating new player ${playerData.id}`);
+            const sprite = this.playerManager.createPlayer(playerData);
             
-            if (!existingPlayer) {
-                // Create new player
-                console.log(`👤 Creating new player ${playerData.id}`);
-                this.playerManager.createPlayer(playerData);
-            } else {
-                // Update existing player (position, state, etc.)
-                this.updateExistingPlayer(playerData, gameState);
+            // If this is our player and we don't have a main player yet
+            if (playerData.id === mySocketId && !this.playerManager.mainPlayer) {
+                console.log('🎮 Setting up main player immediately');
+                this.playerManager.setMainPlayer(playerData.id);
             }
-        });
+        } else {
+            // Update existing player
+            this.updateExistingPlayer(playerData, gameState);
+        }
+    });
 
-        // Remove players that left
-        Object.keys(this.playerManager.players).forEach(playerId => {
-            if (!gameState.players[playerId]) {
-                console.log(`👋 Removing disconnected player ${playerId}`);
-                const player = this.playerManager.getPlayer(playerId);
-                if (player) {
-                    player.destroy();
-                    delete this.playerManager.players[playerId];
-                }
+    // Remove disconnected players
+    Object.keys(this.playerManager.players).forEach(playerId => {
+        if (!gameState.players[playerId]) {
+            console.log(`👋 Removing disconnected player ${playerId}`);
+            const player = this.playerManager.getPlayer(playerId);
+            if (player) {
+                player.destroy();
+                delete this.playerManager.players[playerId];
             }
-        });
+        }
+    });
 
-        // Ensure we have a main player
-        this.ensureMainPlayer(mySocketId);
-        
-        this.playersCreated = true;
-    }
+    // Ensure we have a main player
+    this.ensureMainPlayer(mySocketId);
+}
 
     updateExistingPlayer(playerData, gameState) {
         const isMainPlayer = playerData.id === this.networkManager.getSocketId();
@@ -305,21 +314,21 @@ class RoomSelectScene extends Phaser.Scene {
     }
 
     ensureMainPlayer(mySocketId) {
-        if (!this.playerManager.mainPlayer && mySocketId) {
-            const myPlayer = this.playerManager.getPlayer(mySocketId);
-            if (myPlayer) {
-                console.log('🎮 Setting up main player:', mySocketId);
-                this.playerManager.mainPlayer = myPlayer;
-                this.playerManager.mainPlayerId = mySocketId;
-                this.playerManager.setupMainPlayer();
-                
-                // Setup physics with delay
-                this.time.delayedCall(100, () => {
-                    this.setupMainPlayerPhysics();
-                });
-            }
+    if (!mySocketId) {
+        console.warn('⚠️ No socket ID available for main player setup');
+        return;
+    }
+    
+    if (!this.playerManager.mainPlayer) {
+        const myPlayer = this.playerManager.getPlayer(mySocketId);
+        if (myPlayer) {
+            console.log('🎮 Setting up main player (ensured):', mySocketId);
+            this.playerManager.setMainPlayer(mySocketId);
+        } else {
+            console.log('⚠️ Main player sprite not found for socket ID:', mySocketId);
         }
     }
+}
 
     setupMainPlayerPhysics() {
         if (!this.playerManager.mainPlayer) {
@@ -370,43 +379,46 @@ class RoomSelectScene extends Phaser.Scene {
     }
 
     update() {
-        try {
-            // Debug hotkeys
-            if (this.input.keyboard.addKey('P').isDown) {
-                this.playerManager.debugPlayerState();
-            }
-            
-            // Manual fix - F key to force set main player
-            if (this.input.keyboard.addKey('F').isDown) {
-                const mySocketId = this.networkManager.getSocketId();
-                if (mySocketId && this.playerManager.players[mySocketId]) {
-                    console.log('🔧 MANUAL: Forcing main player setup');
-                    this.playerManager.mainPlayer = this.playerManager.players[mySocketId];
-                    this.playerManager.mainPlayerId = mySocketId;
-                    this.playerManager.setupMainPlayer();
-                    this.setupMainPlayerPhysics();
-                }
-            }
-
-            // Handle movement input for main player
-            if (this.playerManager && this.playerManager.mainPlayer) {
-                this.playerManager.handleMovementInput();
-            }
-            
-            // Interpolate other players' movements
-            if (this.playerManager) {
-                this.playerManager.interpolatePlayerMovement();
-            }
-            
-            // Update network status periodically
-            if (Date.now() - this.lastGameStateUpdate > 2000) {
-                this.updateNetworkStatus();
-            }
-            
-        } catch (error) {
-            console.error('Error in update loop:', error);
+    try {
+        // Debug hotkeys
+        if (this.input.keyboard.addKey('P').isDown) {
+            this.playerManager.debugPlayerState();
         }
+        
+        // Emergency recovery - R key
+        if (this.input.keyboard.addKey('R').isDown) {
+            console.log('🚨 Manual recovery triggered');
+            this.playerManager.forceRecoverMainPlayer();
+        }
+        
+        // Manual main player setup - F key
+        if (this.input.keyboard.addKey('F').isDown) {
+            const mySocketId = this.networkManager.getSocketId();
+            if (mySocketId && this.playerManager.players[mySocketId]) {
+                console.log('🔧 MANUAL: Forcing main player setup');
+                this.playerManager.setMainPlayer(mySocketId);
+            }
+        }
+
+        // Handle movement input
+        if (this.playerManager && this.playerManager.mainPlayer) {
+            this.playerManager.handleMovementInput();
+        }
+        
+        // Interpolate other players
+        if (this.playerManager) {
+            this.playerManager.interpolatePlayerMovement();
+        }
+        
+        // Update network status periodically
+        if (Date.now() - this.lastGameStateUpdate > 2000) {
+            this.updateNetworkStatus();
+        }
+        
+    } catch (error) {
+        console.error('Error in update loop:', error);
     }
+}
 
     // Scene lifecycle methods
     shutdown() {

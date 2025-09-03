@@ -11,112 +11,141 @@ class PlayerManager {
         this.playerMoney = GAME_CONFIG.ECONOMY.STARTING_MONEY;
         this.mainPlayer = null;
         this.mainPlayerId = null;
-        this.movementEnabled = true;
+        this.movementEnabled = false; // Start disabled until properly setup
+        
+        // Movement state tracking
+        this.lastMovementSent = 0;
+        this.movementThrottle = 50; // Only send every 50ms
         
         // Store socket ID for reliable comparison
         this.mySocketId = null;
-        if (this.scene.networkManager && this.scene.networkManager.getSocketId) {
-            this.mySocketId = this.scene.networkManager.getSocketId();
-        }
+        this.updateSocketId();
         
-        console.log('🔧 PlayerManager initialized with socket ID:', this.mySocketId);
+        console.log('🔧 PlayerManager initialized');
+    }
+
+    updateSocketId() {
+        if (this.scene.networkManager && this.scene.networkManager.getSocketId) {
+            const newSocketId = this.scene.networkManager.getSocketId();
+            if (newSocketId && newSocketId !== this.mySocketId) {
+                this.mySocketId = newSocketId;
+                console.log('🆔 Socket ID updated:', this.mySocketId);
+                
+                // If we already have a player for this ID, set it as main player
+                if (this.players[this.mySocketId] && !this.mainPlayer) {
+                    this.setMainPlayer(this.mySocketId);
+                }
+            }
+        }
     }
 
     createPlayer(playerData) {
-        console.log('🔍 DEBUG: createPlayer called with:', {
-            playerId: playerData.id,
-            mySocketId: this.mySocketId,
-            playerExists: !!this.players[playerData.id]
+        console.log('👤 Creating player:', {
+            id: playerData.id,
+            position: `(${playerData.x}, ${playerData.y})`,
+            isMe: playerData.id === this.mySocketId
         });
 
+        // Don't recreate if already exists
         if (this.players[playerData.id]) {
-            console.log(`⚠️ Player ${playerData.id} already exists, updating instead`);
-            return this.updatePlayer(playerData);
+            console.log(`⚠️ Player ${playerData.id} already exists, updating position`);
+            this.updatePlayerPosition(playerData.id, playerData.x, playerData.y);
+            return this.players[playerData.id];
         }
 
-        console.log(`👤 Creating player ${playerData.id} at (${playerData.x}, ${playerData.y})`);
+        // Update socket ID before creating player
+        this.updateSocketId();
         
-        // Create physics sprite with proper setup
-        const sprite = this.scene.physics.add.sprite(playerData.x, playerData.y, 'player');
+        // Create physics sprite
+        const sprite = this.scene.physics.add.sprite(
+            playerData.x || 100, 
+            playerData.y || 400, 
+            'player'
+        );
+        
+        // Configure sprite properties
+        sprite.setCollideWorldBounds(true);
+        sprite.setDrag(400, 400);
+        sprite.setMaxVelocity(GAME_CONFIG.PLAYER.SPEED, GAME_CONFIG.PLAYER.SPEED);
+        sprite.setDepth(10); // Ensure players are visible
         
         // Configure physics body
-        sprite.setCollideWorldBounds(true);
-        sprite.setDrag(300, 300); // Add drag to prevent sliding
-        sprite.setMaxVelocity(GAME_CONFIG.PLAYER.SPEED, GAME_CONFIG.PLAYER.SPEED);
-        
-        // Ensure body is properly set up
         if (sprite.body) {
-            sprite.body.setSize(32, 48); // Set collision box
+            sprite.body.setSize(28, 40);
+            sprite.body.setOffset(2, 8);
             sprite.body.immovable = false;
             sprite.body.moves = true;
             sprite.body.enable = true;
+            sprite.body.debugShowBody = window.DEBUG_MODE || false;
         }
         
         // Store player reference
         this.players[playerData.id] = sprite;
-
-        // Update socket ID if needed
-        if (!this.mySocketId && this.scene.networkManager && this.scene.networkManager.getSocketId) {
-            this.mySocketId = this.scene.networkManager.getSocketId();
-        }
-
-        // Check if this is the main player
+        sprite.playerId = playerData.id; // Store ID on sprite for reference
+        
+        // Check if this should be the main player
         const isMainPlayer = playerData.id === this.mySocketId;
-        console.log('🔍 Is main player check:', {
+        
+        console.log('🔍 Player creation check:', {
             playerId: playerData.id,
             mySocketId: this.mySocketId,
-            isMainPlayer: isMainPlayer
+            isMainPlayer: isMainPlayer,
+            hasMainPlayer: !!this.mainPlayer
         });
-
-        // Set up main player
+        
         if (isMainPlayer) {
-            this.mainPlayer = sprite;
-            this.mainPlayerId = playerData.id;
-            console.log('🎮 Setting up main player with ID:', playerData.id);
-            
-            // Setup main player immediately
-            this.time.delayedCall(50, () => {
-                this.setupMainPlayer();
-            });
-            
-            // Additional debug
-            console.log('🔍 Main player setup complete:', {
-                mainPlayer: !!this.mainPlayer,
-                mainPlayerId: this.mainPlayerId,
-                spriteExists: !!sprite,
-                bodyExists: !!sprite.body
-            });
+            this.setMainPlayer(playerData.id);
         }
-
+        
         return sprite;
     }
 
+    setMainPlayer(playerId) {
+        const sprite = this.players[playerId];
+        if (!sprite) {
+            console.error('❌ Cannot set main player - sprite not found:', playerId);
+            return false;
+        }
+
+        console.log('🎮 Setting main player:', playerId);
+        
+        this.mainPlayer = sprite;
+        this.mainPlayerId = playerId;
+        
+        // Setup main player with delay to ensure scene is ready
+        this.scene.time.delayedCall(100, () => {
+            this.setupMainPlayer();
+        });
+        
+        return true;
+    }
+
     setupMainPlayer() {
-        if (!this.mainPlayer) {
-            console.log('❌ Cannot setup main player - sprite not found');
+        if (!this.mainPlayer || !this.mainPlayer.body) {
+            console.error('❌ Cannot setup main player - invalid state');
             return;
         }
 
-        console.log('🔧 Setting up main player...');
-
-        // Enable camera following with smooth lerp
-        this.scene.cameras.main.startFollow(this.mainPlayer, true, 0.05, 0.05);
-        this.scene.cameras.main.setDeadzone(100, 100);
+        console.log('🔧 Setting up main player physics and camera...');
         
-        // Ensure physics body is active and moveable
-        if (this.mainPlayer.body) {
-            this.mainPlayer.body.enable = true;
-            this.mainPlayer.body.moves = true;
-            this.mainPlayer.body.immovable = false;
-            this.mainPlayer.setActive(true);
-            this.mainPlayer.setVisible(true);
-        }
-
-        // Reset any previous movement state
+        // Reset physics state
         this.mainPlayer.setVelocity(0, 0);
-        this.movementEnabled = true;
+        this.mainPlayer.body.enable = true;
+        this.mainPlayer.body.moves = true;
+        this.mainPlayer.body.immovable = false;
         
-        console.log('✅ Main player physics setup complete');
+        // Setup camera following
+        const camera = this.scene.cameras.main;
+        camera.stopFollow();
+        camera.startFollow(this.mainPlayer, true, 0.08, 0.08);
+        camera.setDeadzone(80, 80);
+        camera.setZoom(1);
+        
+        // Enable movement after a short delay
+        this.scene.time.delayedCall(200, () => {
+            this.movementEnabled = true;
+            console.log('✅ Main player setup complete - movement enabled');
+        });
     }
 
     updatePlayer(playerData) {
@@ -150,23 +179,44 @@ class PlayerManager {
     }
 
     updatePlayerPosition(playerId, x, y) {
-        if (playerId === this.mainPlayerId) return; // Don't update main player from network
-        if (!this.players[playerId]) return;
+        // Don't update main player position from network
+        if (playerId === this.mainPlayerId) {
+            return;
+        }
         
-        this.playerTargets[playerId] = { x, y };
+        const sprite = this.players[playerId];
+        if (!sprite) return;
+        
+        // Store target for smooth interpolation
+        this.playerTargets[playerId] = { x, y, timestamp: Date.now() };
     }
 
     interpolatePlayerMovement() {
+        const now = Date.now();
+        
         Object.keys(this.playerTargets).forEach(playerId => {
-            if (playerId === this.mainPlayerId) return; // Skip main player
+            if (playerId === this.mainPlayerId) return;
             
             const target = this.playerTargets[playerId];
             const sprite = this.players[playerId];
+            
             if (!sprite || !target) return;
             
-            const lerp = 0.2;
-            sprite.x += (target.x - sprite.x) * lerp;
-            sprite.y += (target.y - sprite.y) * lerp;
+            // Skip very old targets
+            if (now - target.timestamp > 1000) {
+                delete this.playerTargets[playerId];
+                return;
+            }
+            
+            // Smooth interpolation
+            const lerp = 0.15;
+            const dx = target.x - sprite.x;
+            const dy = target.y - sprite.y;
+            
+            if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+                sprite.x += dx * lerp;
+                sprite.y += dy * lerp;
+            }
         });
     }
 
@@ -322,75 +372,92 @@ class PlayerManager {
     }
 
     handleMovementInput() {
-        const me = this.mainPlayer;
-        if (!me) {
-            // Try to find main player if not set
-            if (this.mySocketId && this.players[this.mySocketId]) {
-                console.log('🔧 Recovering main player reference');
-                this.mainPlayer = this.players[this.mySocketId];
-                this.mainPlayerId = this.mySocketId;
-                this.setupMainPlayer();
-                return;
-            }
-            
-            console.log('⚠️ No main player found for movement input');
+        // Early returns for invalid state
+        if (!this.mainPlayer || !this.mainPlayer.body) {
+            this.updateSocketId(); // Try to recover
+            return;
+        }
+        
+        if (!this.movementEnabled || this.sleeping[this.mainPlayerId]) {
+            this.mainPlayer.setVelocity(0, 0);
             return;
         }
 
-        // Check if movement is enabled
-        if (!this.movementEnabled) {
-            me.setVelocity(0, 0);
-            return;
-        }
-
-        // Check if player is sleeping
-        if (this.sleeping[this.mainPlayerId]) {
-            me.setVelocity(0, 0);
-            return;
-        }
-
-        // Ensure physics body is active
-        if (!me.body || !me.body.enable) {
-            console.log('⚠️ Player physics body not active');
-            if (me.body) {
-                me.body.enable = true;
-                me.body.moves = true;
-            }
-            return;
-        }
-
-        // Reset velocity
-        me.setVelocity(0, 0);
-        let moved = false;
-
+        // Get input
         const cursors = this.scene.cursors;
         const wasd = this.scene.wasd;
+        
+        if (!cursors || !wasd) {
+            console.warn('⚠️ Input not properly initialized');
+            return;
+        }
 
-        // Check input and apply movement
+        let velocityX = 0;
+        let velocityY = 0;
+        let isMoving = false;
+
+        // Calculate movement
         if (cursors.left.isDown || wasd.left.isDown) {
-            me.setVelocityX(-GAME_CONFIG.PLAYER.SPEED); 
-            moved = true;
+            velocityX = -GAME_CONFIG.PLAYER.SPEED;
+            isMoving = true;
         } else if (cursors.right.isDown || wasd.right.isDown) {
-            me.setVelocityX(GAME_CONFIG.PLAYER.SPEED); 
-            moved = true;
+            velocityX = GAME_CONFIG.PLAYER.SPEED;
+            isMoving = true;
         }
         
         if (cursors.up.isDown || wasd.up.isDown) {
-            me.setVelocityY(-GAME_CONFIG.PLAYER.SPEED); 
-            moved = true;
+            velocityY = -GAME_CONFIG.PLAYER.SPEED;
+            isMoving = true;
         } else if (cursors.down.isDown || wasd.down.isDown) {
-            me.setVelocityY(GAME_CONFIG.PLAYER.SPEED); 
-            moved = true;
+            velocityY = GAME_CONFIG.PLAYER.SPEED;
+            isMoving = true;
         }
 
-        // Send movement to server if moved
-        // Send position to server
-if (moved && this.scene.networkManager) {
-    this.scene.networkManager.sendPlayerMove(
-        this.mainPlayer.x,
-        this.mainPlayer.y
-    );
-}
+        // Apply movement
+        this.mainPlayer.setVelocity(velocityX, velocityY);
+
+        // Send to server with throttling
+        if (isMoving && this.scene.networkManager) {
+            const now = Date.now();
+            if (now - this.lastMovementSent > this.movementThrottle) {
+                this.scene.networkManager.sendPlayerMove(
+                    this.mainPlayer.x,
+                    this.mainPlayer.y
+                );
+                this.lastMovementSent = now;
+            }
+        }
+    }
+
+    // Emergency recovery methods
+    forceRecoverMainPlayer() {
+        console.log('🚨 EMERGENCY: Attempting to recover main player');
+        
+        this.updateSocketId();
+        
+        if (this.mySocketId && this.players[this.mySocketId]) {
+            const sprite = this.players[this.mySocketId];
+            
+            // Reset main player reference
+            this.mainPlayer = sprite;
+            this.mainPlayerId = this.mySocketId;
+            
+            // Reset physics
+            if (sprite.body) {
+                sprite.body.enable = true;
+                sprite.body.moves = true;
+                sprite.body.immovable = false;
+            }
+            
+            // Re-setup
+            this.setupMainPlayer();
+            
+            console.log('✅ Main player recovery attempted');
+            return true;
+        }
+        
+        console.error('❌ Could not recover main player');
+        return false;
     }
 
     // Force reset player physics (useful for debugging)
@@ -421,19 +488,20 @@ if (moved && this.scene.networkManager) {
     }
 
     // Debug method to check player state
-    debugPlayerState() {
-        console.log('🔍 Debug Player State:', {
+     debugPlayerState() {
+        console.log('🔍 Player Debug State:', {
             mySocketId: this.mySocketId,
             mainPlayerId: this.mainPlayerId,
             mainPlayerExists: !!this.mainPlayer,
-            playersCount: Object.keys(this.players).length,
-            players: Object.keys(this.players),
-            position: this.mainPlayer ? { x: this.mainPlayer.x, y: this.mainPlayer.y } : 'no player',
-            velocity: this.mainPlayer && this.mainPlayer.body ? { x: this.mainPlayer.body.velocity.x, y: this.mainPlayer.body.velocity.y } : 'no body',
+            mainPlayerBodyExists: !!(this.mainPlayer && this.mainPlayer.body),
+            mainPlayerBodyEnabled: !!(this.mainPlayer && this.mainPlayer.body && this.mainPlayer.body.enable),
             movementEnabled: this.movementEnabled,
-            sleeping: this.sleeping[this.mainPlayerId],
-            bodyEnabled: this.mainPlayer && this.mainPlayer.body ? this.mainPlayer.body.enable : 'no body',
-            bodyMoves: this.mainPlayer && this.mainPlayer.body ? this.mainPlayer.body.moves : 'no body'
+            totalPlayers: Object.keys(this.players).length,
+            playerIds: Object.keys(this.players),
+            sleeping: this.sleeping[this.mainPlayerId] || false,
+            position: this.mainPlayer ? `(${Math.round(this.mainPlayer.x)}, ${Math.round(this.mainPlayer.y)})` : 'N/A',
+            velocity: this.mainPlayer && this.mainPlayer.body ? 
+                `(${Math.round(this.mainPlayer.body.velocity.x)}, ${Math.round(this.mainPlayer.body.velocity.y)})` : 'N/A'
         });
     }
 
@@ -457,36 +525,27 @@ if (moved && this.scene.networkManager) {
         return false;
     }
 
-    destroy() {
+     destroy() {
         console.log('🗑️ Destroying PlayerManager');
 
-        // Clean up money timers
-        Object.values(this.moneyTimers).forEach(timer => {
-            clearInterval(timer);
-        });
-        this.moneyTimers = {};
+        // Clean up timers and tweens
+        Object.values(this.moneyTimers).forEach(timer => clearInterval(timer));
+        Object.values(this.sleepTweens).forEach(tween => tween && tween.stop());
+        Object.values(this.zzzTexts).forEach(text => text && text.destroy());
 
-        // Stop tweens
-        Object.values(this.sleepTweens).forEach(tween => {
-            if (tween) tween.stop();
-        });
-        this.sleepTweens = {};
-
-        // Remove Zzz texts
-        Object.values(this.zzzTexts).forEach(text => {
-            if (text) text.destroy();
-        });
-        this.zzzTexts = {};
-
-        // Destroy player sprites
-        Object.values(this.players).forEach(sprite => {
-            if (sprite) sprite.destroy();
-        });
+        // Destroy sprites
+        Object.values(this.players).forEach(sprite => sprite && sprite.destroy());
         
+        // Clear references
         this.players = {};
+        this.playerTargets = {};
+        this.sleeping = {};
+        this.zzzTexts = {};
+        this.sleepTweens = {};
+        this.moneyTimers = {};
         this.mainPlayer = null;
         this.mainPlayerId = null;
-
-        console.log("✅ PlayerManager destroyed");
+        
+        console.log('✅ PlayerManager destroyed');
     }
 }

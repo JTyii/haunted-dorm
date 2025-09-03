@@ -1,3 +1,4 @@
+// server/managers/PlayerManager.js - Updated with enhanced createPlayer method
 const config = require('../config/serverConfig');
 
 class PlayerManager {
@@ -17,8 +18,8 @@ class PlayerManager {
         
         // Set defaults using the new config structure (config.GAME instead of config.PLAYER)
         this.config = {
-            STARTING_X: 50, // Default position
-            STARTING_Y: 500, // Default position
+            STARTING_X: 100, // Enhanced starting position
+            STARTING_Y: 400, // Enhanced starting position  
             STARTING_MONEY: config.GAME.PLAYER_START_MONEY || 100,
             SLEEP_EARNINGS: config.GAME.SLEEP_EARNINGS_PER_INTERVAL || 5,
             GHOST_KILL_BOUNTY: config.GAME.GHOST_KILL_BOUNTY || 10
@@ -27,17 +28,20 @@ class PlayerManager {
         console.log('✅ PlayerManager config validated:', this.config);
     }
 
+    // ENHANCED createPlayer method - REPLACE your existing one with this
     createPlayer(socketId) {
         const player = {
             id: socketId,
-            x: this.config.STARTING_X,
-            y: this.config.STARTING_Y,
+            x: this.config.STARTING_X, // Use config value (100)
+            y: this.config.STARTING_Y, // Use config value (400)
             roomId: null,
             towers: [],
             isSleeping: false,
             bed: null, // { roomId, bedIndex }
             money: this.config.STARTING_MONEY,
-            joinTime: Date.now()
+            joinTime: Date.now(),
+            lastMoveTime: Date.now(), // NEW: Track last movement
+            lastBroadcast: 0 // NEW: Track last broadcast for throttling
         };
 
         this.players[socketId] = player;
@@ -51,7 +55,7 @@ class PlayerManager {
             startTime: Date.now()
         };
 
-        console.log('✅ Player created:', socketId);
+        console.log('✅ Server player created:', socketId, `at (${player.x}, ${player.y})`);
         return player;
     }
 
@@ -67,12 +71,37 @@ class PlayerManager {
         return this.playerStats[socketId];
     }
 
+    // ENHANCED updatePlayerPosition method
     updatePlayerPosition(socketId, x, y) {
         const player = this.players[socketId];
         if (!player || player.isSleeping) return false;
 
-        player.x = x;
-        player.y = y;
+        // Enhanced validation
+        if (typeof x !== 'number' || typeof y !== 'number') return false;
+        if (!isFinite(x) || !isFinite(y)) return false;
+        
+        // Basic bounds checking
+        if (x < -100 || x > 2100 || y < -100 || y > 1100) {
+            console.warn(`⚠️ Player ${socketId} tried to move out of bounds: (${x}, ${y})`);
+            return false;
+        }
+        
+        // Calculate movement delta for validation
+        const dx = Math.abs(x - player.x);
+        const dy = Math.abs(y - player.y);
+        const maxDelta = 100; // Maximum pixels per update
+        
+        if (dx > maxDelta || dy > maxDelta) {
+            console.warn(`⚠️ Large movement delta from ${socketId}: (${dx}, ${dy})`);
+            // Allow but clamp the movement
+            player.x = Math.max(-50, Math.min(2050, x));
+            player.y = Math.max(-50, Math.min(1050, y));
+        } else {
+            player.x = x;
+            player.y = y;
+        }
+        
+        player.lastMoveTime = Date.now();
         return true;
     }
 
