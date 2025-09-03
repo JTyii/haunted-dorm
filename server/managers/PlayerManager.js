@@ -10,18 +10,18 @@ class PlayerManager {
     }
 
     validateConfig() {
-        if (!config || !config.PLAYER) {
+        if (!config || !config.GAME) {
             console.error('❌ Server config not properly loaded');
             throw new Error('Server configuration is missing');
         }
         
-        // Set defaults if config values are missing
+        // Set defaults using the new config structure (config.GAME instead of config.PLAYER)
         this.config = {
-            STARTING_X: config.PLAYER.STARTING_X || 50,
-            STARTING_Y: config.PLAYER.STARTING_Y || 500,
-            STARTING_MONEY: config.PLAYER.STARTING_MONEY || 100,
-            SLEEP_EARNINGS: config.PLAYER.SLEEP_EARNINGS || 5,
-            GHOST_KILL_BOUNTY: config.PLAYER.GHOST_KILL_BOUNTY || 10
+            STARTING_X: 50, // Default position
+            STARTING_Y: 500, // Default position
+            STARTING_MONEY: config.GAME.PLAYER_START_MONEY || 100,
+            SLEEP_EARNINGS: config.GAME.SLEEP_EARNINGS_PER_INTERVAL || 5,
+            GHOST_KILL_BOUNTY: config.GAME.GHOST_KILL_BOUNTY || 10
         };
         
         console.log('✅ PlayerManager config validated:', this.config);
