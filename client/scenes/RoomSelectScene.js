@@ -83,6 +83,13 @@ class RoomSelectScene extends Phaser.Scene {
             fill: '#cccccc',
             wordWrap: { width: 400 }
         }).setScrollFactor(0);
+
+        this.debugText = this.add.text(10, 120, 'Debug: Press P for player state, R to reset main player', {
+        fontSize: '12px',
+        fill: '#ffffff',
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        padding: { x: 5, y: 5 }
+    }).setScrollFactor(0).setDepth(1000);
     }
 
     setupControls() {
@@ -195,39 +202,79 @@ class RoomSelectScene extends Phaser.Scene {
     }
 
     handlePlayers(state) {
-        // Create/update players
-        Object.values(state.players).forEach(playerData => {
-            const existingPlayer = this.playerManager.getPlayer(playerData.id);
+    console.log('🔍 DEBUG: Handling players...', {
+        currentSocketId: this.networkManager.getSocketId(),
+        playersInState: Object.keys(state.players),
+        existingPlayers: Object.keys(this.playerManager.players)
+    });
+
+    // Create/update players
+    Object.values(state.players).forEach((playerData, index) => {
+        console.log('🔍 Processing player:', {
+            playerId: playerData.id,
+            index: index,
+            position: { x: playerData.x, y: playerData.y },
+            isMainPlayerBySocketId: playerData.id === this.networkManager.getSocketId()
+        });
+
+        const existingPlayer = this.playerManager.getPlayer(playerData.id);
+        
+        if (!existingPlayer) {
+            // Create new player
+            console.log(`👤 Creating player ${playerData.id}`, playerData);
+            const player = this.playerManager.createPlayer(playerData);
+        } else {
+            // Update existing player
+            this.updateExistingPlayer(playerData, state);
+        }
+    });
+
+    // FORCE SET MAIN PLAYER if we don't have one
+    if (!this.playerManager.mainPlayer) {
+        const playerIds = Object.keys(this.playerManager.players);
+        if (playerIds.length > 0) {
+            const firstPlayerId = playerIds[0];
+            console.log('🎮 FORCING main player to be:', firstPlayerId);
             
-            if (!existingPlayer) {
-                // Create new player
-                console.log(`👤 Creating player ${playerData.id}`, playerData);
-                const player = this.playerManager.createPlayer(playerData);
+            // Directly set main player
+            this.playerManager.mainPlayer = this.playerManager.players[firstPlayerId];
+            this.playerManager.mainPlayerId = firstPlayerId;
+            
+            // Setup main player
+            if (this.playerManager.mainPlayer) {
+                this.playerManager.setupMainPlayer();
+                this.setupMainPlayerPhysics();
                 
-                // Setup physics interactions for main player
-                if (playerData.id === this.networkManager.getSocketId()) {
-                    this.setupMainPlayerPhysics();
-                }
-            } else {
-                // Update existing player
-                this.updateExistingPlayer(playerData, state);
+                this.time.delayedCall(100, () => {
+                    this.playerManager.enableMovement();
+                    console.log('✅ Main player movement enabled for:', firstPlayerId);
+                });
             }
-        });
-
-        // Remove players that left
-        Object.keys(this.playerManager.players).forEach(playerId => {
-            if (!state.players[playerId]) {
-                console.log(`👋 Removing player ${playerId}`);
-                const player = this.playerManager.getPlayer(playerId);
-                if (player) {
-                    player.destroy();
-                    delete this.playerManager.players[playerId];
-                }
-            }
-        });
-
-        this.playersCreated = true;
+        }
     }
+
+    // Remove players that left
+    Object.keys(this.playerManager.players).forEach(playerId => {
+        if (!state.players[playerId]) {
+            console.log(`👋 Removing player ${playerId}`);
+            const player = this.playerManager.getPlayer(playerId);
+            if (player) {
+                player.destroy();
+                delete this.playerManager.players[playerId];
+            }
+        }
+    });
+
+    // Debug: Check final state
+    console.log('🔍 Final player state after handlePlayers:', {
+        mainPlayer: this.playerManager.mainPlayer ? 'exists' : 'null',
+        mainPlayerId: this.playerManager.mainPlayerId,
+        totalPlayers: Object.keys(this.playerManager.players).length,
+        playerIds: Object.keys(this.playerManager.players)
+    });
+
+    this.playersCreated = true;
+}
 
     updateExistingPlayer(playerData, state) {
         const isMainPlayer = playerData.id === this.networkManager.getSocketId();
@@ -253,34 +300,71 @@ class RoomSelectScene extends Phaser.Scene {
     }
 
     setupMainPlayerPhysics() {
-        // Setup wall collisions
-        this.time.delayedCall(100, () => {
-            this.roomManager.setupWallCollisions();
+        console.log('🔧 Setting up main player physics...');
+        
+        // Setup wall collisions with delay to ensure rooms are created
+        this.time.delayedCall(150, () => {
+            if (this.roomManager) {
+                this.roomManager.setupWallCollisions();
+            }
         });
 
-        // Setup bed overlaps
+        // Setup bed overlaps with delay
         this.time.delayedCall(200, () => {
-            this.roomManager.setupBedOverlaps();
+            if (this.roomManager) {
+                this.roomManager.setupBedOverlaps();
+            }
+        });
+
+        // Enable input handling
+        this.time.delayedCall(250, () => {
+            if (this.playerManager && this.playerManager.mainPlayer) {
+                this.playerManager.resetMainPlayerPhysics();
+                console.log('✅ Main player physics setup complete');
+            }
         });
     }
 
     update() {
-        try {
-            // Handle player movement input
+    try {
+        // Debug hotkeys
+        if (this.input.keyboard.addKey('P').isDown) {
+            this.playerManager.debugPlayerState();
+        }
+        
+        // MANUAL FIX - press F key to force set main player
+        if (this.input.keyboard.addKey('F').isDown) {
+            const playerIds = Object.keys(this.playerManager.players);
+            if (playerIds.length > 0) {
+                const firstPlayerId = playerIds[0];
+                console.log('🔧 MANUAL: Forcing main player to be:', firstPlayerId);
+                
+                this.playerManager.mainPlayer = this.playerManager.players[firstPlayerId];
+                this.playerManager.mainPlayerId = firstPlayerId;
+                this.playerManager.setupMainPlayer();
+                this.playerManager.enableMovement();
+                
+                console.log('✅ Manual main player setup complete');
+            }
+        }
+
+        // Handle player movement input
+        if (this.playerManager) {
             this.playerManager.handleMovementInput();
             
             // Interpolate other player movements
             this.playerManager.interpolatePlayerMovement();
-            
-            // Handle ghost movement if controlling a ghost
-            if (this.ghostManager && this.ghostManager.isControllingGhost()) {
-                this.ghostManager.handleGhostMovementInput();
-            }
-            
-        } catch (error) {
-            console.error('Error in update loop:', error);
         }
+        
+        // Handle ghost movement if controlling a ghost
+        if (this.ghostManager && this.ghostManager.isControllingGhost()) {
+            this.ghostManager.handleGhostMovementInput();
+        }
+        
+    } catch (error) {
+        console.error('Error in update loop:', error);
     }
+}
 
     // Clean up when scene is destroyed
     destroy() {
@@ -297,6 +381,11 @@ class RoomSelectScene extends Phaser.Scene {
             console.error('Error destroying scene:', error);
         }
     }
+
+    enableDebugMode() {
+    window.DEBUG_MODE = true;
+    console.log('🔍 Debug mode enabled - press P key to check player state');
+}
 }
 
 window.RoomSelectScene = RoomSelectScene;
