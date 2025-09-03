@@ -207,9 +207,6 @@ class LobbyManager {
             io.emit(SHARED_CONFIG.EVENTS.COUNTDOWN_UPDATE, { remaining: i });
             await this.delay(1000);
         }
-
-        // Actually start the game
-        this.gameStarted = true;
         
         // Prepare game data
         const gameData = {
@@ -218,6 +215,10 @@ class LobbyManager {
             aiGhostsNeeded: ghostCount === 0,
             playersById: this.getPlayersObject()
         };
+
+        // Just return the gameData, let index.js handle migration + final emit
+        console.log(`✅ Countdown complete — returning gameData to server with ${this.players.size} players`);
+        return gameData;
 
         // Assign roles and start game for each player
         for (const [socketId, player] of this.players) {

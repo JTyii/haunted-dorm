@@ -14,66 +14,6 @@ const { placeTower } = require('./game/towers');
 const config = require('./config/serverConfig');
 const { SHARED_CONFIG } = require('../shared/constants');
 
-// Enhanced SHARED_CONFIG with all necessary events
-SHARED_CONFIG.EVENTS = {
-    ...SHARED_CONFIG.EVENTS,
-    // Connection events
-    CONNECTION: 'connect',
-    DISCONNECTION: 'disconnect',
-    CONNECTION_ERROR: 'connect_error',
-    RECONNECT: 'reconnect',
-    RECONNECT_ERROR: 'reconnect_error',
-    
-    // Lobby events
-    JOIN_LOBBY: 'joinLobby',
-    LOBBY_UPDATE: 'lobbyUpdate',
-    SELECT_ROLE: 'selectRole',
-    ROLE_SELECTED: 'roleSelected',
-    ROLE_SELECTION_FAILED: 'roleSelectionFailed',
-    SET_READY: 'setReady',
-    READY_STATUS_UPDATED: 'readyStatusUpdated',
-    REQUEST_GAME_START: 'requestGameStart',
-    GAME_STARTING: 'gameStarting',
-    COUNTDOWN_UPDATE: 'countdownUpdate',
-    GAME_STARTED: 'gameStarted',
-    
-    // Game events
-    JOIN_GAME: 'joinGame',
-    GAME_STATE: 'gameState',
-    PLAYER_MOVE: 'playerMove',
-    PLAYER_JOIN: 'playerJoined',
-    PLAYER_LEFT: 'playerLeft',
-    ENTER_ROOM: 'enterRoom',
-    SNAP_TO_BED: 'snapToBed',
-    BED_OCCUPIED: 'bedOccupied',
-    PLAYER_WOKE_UP: 'playerWokeUp',
-    REQUEST_BED_SLEEP: 'requestBedSleep',
-    REQUEST_WAKE_UP: 'requestWakeUp',
-    ROOM_MESSAGE: 'roomMessage',
-    
-    // Building events
-    BUILD_TOWER: 'buildTower',
-    PLACE_TOWER: 'placeTower',
-    TOWER_PLACED: 'towerPlaced',
-    BUILD_FAILED: 'buildFailed',
-    UPGRADE_TOWER: 'upgradeTower',
-    
-    // Ghost events
-    REQUEST_GHOST_ROLE: 'requestGhostRole',
-    RELEASE_GHOST_ROLE: 'releaseGhostRole',
-    GHOST_ROLE_GRANTED: 'ghostRoleGranted',
-    GHOST_ROLE_DENIED: 'ghostRoleDenied',
-    GHOST_ROLE_RELEASED: 'ghostRoleReleased',
-    GHOST_INPUT: 'ghostInput',
-    GHOST_UPDATE: 'ghostUpdate',
-    GHOST_ABILITY_USED: 'ghostAbilityUsed',
-    GHOST_MINION_SPAWNED: 'ghostMinionSpawned',
-    
-    // Utility events
-    ERROR: 'error',
-    DEBUG: 'debug'
-};
-
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -166,31 +106,30 @@ io.on('connection', (socket) => {
     // ===== LOBBY EVENTS =====
     
     socket.on(SHARED_CONFIG.EVENTS.JOIN_LOBBY, (playerData) => {
-        console.log('📥 Join lobby request from:', socket.id, playerData);
-        
-        try {
-            // Add player to lobby
-            const player = lobbyManager.addPlayer(socket.id, playerData);
-            
-            // Update connection state
-            const playerState = activePlayers.get(socket.id);
-            if (playerState) {
-                playerState.inLobby = true;
-            }
-            
-            // Send lobby state to all players
-            const lobbyState = lobbyManager.getLobbyState();
-            io.emit(SHARED_CONFIG.EVENTS.LOBBY_UPDATE, lobbyState);
-            
-            console.log('✅ Player joined lobby successfully:', socket.id);
-            
-        } catch (error) {
-            console.error('❌ Failed to join lobby:', error);
-            socket.emit(SHARED_CONFIG.EVENTS.ERROR, { 
-                message: 'Failed to join lobby: ' + error.message 
-            });
+    console.log('📥 Join lobby request from:', socket.id, playerData);
+
+    try {
+        const player = lobbyManager.addPlayer(socket.id, playerData);
+
+        const playerState = activePlayers.get(socket.id);
+        if (playerState) {
+            playerState.inLobby = true;
         }
-    });
+
+        // Prepare lobby state
+        const lobbyState = lobbyManager.getLobbyState();
+
+        io.emit(SHARED_CONFIG.EVENTS.LOBBY_UPDATE, lobbyState);
+
+        console.log('✅ Player joined lobby successfully:', socket.id);
+
+    } catch (error) {
+        console.error('❌ Failed to join lobby:', error);
+        socket.emit(SHARED_CONFIG.EVENTS.ERROR, { 
+            message: 'Failed to join lobby: ' + error.message 
+        });
+    }
+});
 
     socket.on(SHARED_CONFIG.EVENTS.SELECT_ROLE, ({ role }) => {
         console.log('📥 Role selection from:', socket.id, '- Role:', role);
@@ -242,50 +181,50 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on(SHARED_CONFIG.EVENTS.REQUEST_GAME_START, () => {
-        console.log('📥 Game start request from:', socket.id);
-        
-        try {
-            if (lobbyManager.canStartGame()) {
-                // Start the game (async)
-                lobbyManager.startGame(io).then(success => {
-                    if (success) {
-                        console.log('✅ Game started successfully');
-                        
-                        // Move players from lobby to game state
-                        const players = lobbyManager.getAllPlayers();
-                        players.forEach(player => {
-                            // Create game player
-                            const newPlayer = playerManager.createPlayer(player.id);
-                            newPlayer.selectedRole = player.selectedRole;
-                            gameState.players[player.id] = newPlayer;
-                            
-                            // Update connection state
-                            const playerState = activePlayers.get(player.id);
-                            if (playerState) {
-                                playerState.inLobby = false;
-                                playerState.inGame = true;
-                            }
-                        });
-                        
-                    } else {
-                        socket.emit(SHARED_CONFIG.EVENTS.ERROR, { message: 'Failed to start game' });
-                    }
-                }).catch(error => {
-                    console.error('❌ Game start error:', error);
-                    socket.emit(SHARED_CONFIG.EVENTS.ERROR, { message: 'Game start failed: ' + error.message });
-                });
-            } else {
-                const validation = lobbyManager.validateGameStart();
-                socket.emit(SHARED_CONFIG.EVENTS.ERROR, { 
-                    message: 'Cannot start game: ' + validation.issues.join(', ') 
-                });
-            }
-        } catch (error) {
-            console.error('❌ Error handling game start request:', error);
-            socket.emit(SHARED_CONFIG.EVENTS.ERROR, { message: 'Game start request error' });
+    socket.on(SHARED_CONFIG.EVENTS.REQUEST_GAME_START, async () => {
+    console.log('📥 Game start request from:', socket.id);
+
+    if (!lobbyManager.canStartGame()) {
+        const validation = lobbyManager.validateGameStart();
+        socket.emit(SHARED_CONFIG.EVENTS.ERROR, { message: 'Cannot start: ' + validation.issues.join(', ') });
+        return;
+    }
+
+    try {
+        const gameData = await lobbyManager.startGame(io); // now just prepares & returns gameData
+
+        if (!gameData) {
+            socket.emit(SHARED_CONFIG.EVENTS.ERROR, { message: 'Game start failed' });
+            return;
         }
-    });
+
+        // ✅ Migrate players into gameState
+        const players = lobbyManager.getAllPlayers();
+        players.forEach(player => {
+            const newPlayer = playerManager.createPlayer(player.id);
+            newPlayer.selectedRole = player.selectedRole;
+            gameState.players[player.id] = newPlayer;
+
+            const ps = activePlayers.get(player.id);
+            if (ps) {
+                ps.inLobby = false;
+                ps.inGame = true;
+            }
+        });
+
+        // ✅ Now mark lobby as started
+        lobbyManager.gameStarted = true;
+        lobbyManager.startingGame = false;
+
+        // ✅ Notify clients
+        io.emit(SHARED_CONFIG.EVENTS.GAME_STARTED, { gameData });
+
+        console.log(`🎮 Game started with ${players.length} players`);
+    } catch (err) {
+        console.error('❌ Game start error:', err);
+        socket.emit(SHARED_CONFIG.EVENTS.ERROR, { message: 'Game start error: ' + err.message });
+    }
+});
 
     // ===== GAME EVENTS (after game has started) =====
     

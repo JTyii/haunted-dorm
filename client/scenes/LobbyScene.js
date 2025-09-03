@@ -901,10 +901,17 @@ setupNetworkEvents() {
     // Only add scene-specific handlers here if needed
     
     // Add any additional custom event handlers here
-    this.networkManager.socket.on('custom_lobby_event', (data) => {
-        // Handle custom events specific to lobby
-        console.log('Custom lobby event:', data);
+    this.networkManager.socket.on(SHARED_CONFIG.EVENTS.GAME_STARTED, (data) => {
+    console.log("🎮 Game started event received:", data);
+
+    // Switch to RoomSelectScene with role + game data
+    this.scene.start("RoomSelectScene", { 
+        playerRole: data.playerRole, 
+        gameData: data.gameData,
+        socketId: this.networkManager.getSocketId()
     });
+});
+
 }
 
     startGameCountdown(seconds) {
