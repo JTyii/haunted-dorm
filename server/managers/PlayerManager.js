@@ -4,18 +4,39 @@ class PlayerManager {
     constructor() {
         this.players = {};
         this.playerStats = {}; // Track session stats
+        
+        // Validate config on initialization
+        this.validateConfig();
+    }
+
+    validateConfig() {
+        if (!config || !config.PLAYER) {
+            console.error('❌ Server config not properly loaded');
+            throw new Error('Server configuration is missing');
+        }
+        
+        // Set defaults if config values are missing
+        this.config = {
+            STARTING_X: config.PLAYER.STARTING_X || 50,
+            STARTING_Y: config.PLAYER.STARTING_Y || 500,
+            STARTING_MONEY: config.PLAYER.STARTING_MONEY || 100,
+            SLEEP_EARNINGS: config.PLAYER.SLEEP_EARNINGS || 5,
+            GHOST_KILL_BOUNTY: config.PLAYER.GHOST_KILL_BOUNTY || 10
+        };
+        
+        console.log('✅ PlayerManager config validated:', this.config);
     }
 
     createPlayer(socketId) {
         const player = {
             id: socketId,
-            x: config.PLAYER.STARTING_X,
-            y: config.PLAYER.STARTING_Y,
+            x: this.config.STARTING_X,
+            y: this.config.STARTING_Y,
             roomId: null,
             towers: [],
             isSleeping: false,
             bed: null, // { roomId, bedIndex }
-            money: config.PLAYER.STARTING_MONEY,
+            money: this.config.STARTING_MONEY,
             joinTime: Date.now()
         };
 
@@ -132,6 +153,11 @@ class PlayerManager {
     addGhostKill(socketId) {
         if (this.playerStats[socketId]) {
             this.playerStats[socketId].ghostsKilled++;
+            
+            // Add bounty for ghost kill
+            const bounty = this.config.GHOST_KILL_BOUNTY;
+            this.addMoney(socketId, bounty);
+            console.log(`💀 Player ${socketId} killed ghost - earned $${bounty} bounty!`);
         }
     }
 
@@ -186,14 +212,56 @@ class PlayerManager {
 
     // Money earning system for sleeping players
     processSleepEarnings() {
-        const earnings = config.PLAYER.SLEEP_EARNINGS;
+        const earnings = this.config.SLEEP_EARNINGS;
+        let sleepingCount = 0;
+        
+        try {
+            Object.values(this.players).forEach(player => {
+                if (player.isSleeping) {
+                    this.addMoney(player.id, earnings);
+                    sleepingCount++;
+                    console.log(`💰 Player ${player.id} earned $${earnings} while sleeping (total: $${player.money})`);
+                }
+            });
+            
+            return sleepingCount;
+        } catch (error) {
+            console.error('❌ Error processing sleep earnings:', error);
+            return 0;
+        }
+    }
+
+    // Get financial stats for all players
+    getFinancialStats() {
+        const players = Object.values(this.players);
+        const totalMoney = players.reduce((sum, p) => sum + p.money, 0);
+        const avgMoney = players.length > 0 ? Math.round(totalMoney / players.length) : 0;
+        const richestPlayer = players.reduce((max, p) => p.money > max.money ? p : max, { money: 0 });
+        
+        return {
+            totalPlayers: players.length,
+            totalMoney: totalMoney,
+            averageMoney: avgMoney,
+            richestPlayer: richestPlayer.id || 'none',
+            richestAmount: richestPlayer.money || 0,
+            sleepingCount: this.getSleepingPlayers().length
+        };
+    }
+
+    // Emergency money reset (admin function)
+    resetAllPlayerMoney() {
         Object.values(this.players).forEach(player => {
-            if (player.isSleeping) {
-                this.addMoney(player.id, earnings);
-                console.log(`💰 Player ${player.id} earned $${earnings} while sleeping (total: $${player.money})`);
-            }
+            player.money = this.config.STARTING_MONEY;
         });
-        return Object.values(this.players).filter(p => p.isSleeping).length;
+        console.log('🔄 All player money reset to starting amount');
+    }
+
+    // Award bonus money to all players
+    awardBonusToAll(amount, reason = 'bonus') {
+        Object.values(this.players).forEach(player => {
+            this.addMoney(player.id, amount);
+        });
+        console.log(`💰 Awarded $${amount} ${reason} to all ${Object.keys(this.players).length} players`);
     }
 }
 
